@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    <!-- Simple free-space pathloss model (d^alpha with alpha=2.0) -->
+    <AnalogueModels>
+        <AnalogueModel type="SimplePathlossModel">
+            <parameter name="alpha" type="double" value="2.0"/>   <!-- path loss exponent -->
+            <parameter name="carrierFrequency" type="double" value="5.89e9"/>
+        </AnalogueModel>
+        <Decider type="Decider80211p">
+            <parameter name="centerFrequency" type="double" value="5.89e9"/>
+            <parameter name="thermalNoise" type="double" value="-110"/>    <!-- dBm -->
+            <parameter name="sensitivity" type="double" value="-95"/>      <!-- dBm -->
+            <parameter name="ccaThreshold" type="double" value="-95"/>     <!-- dBm -->
+        </Decider>
+    </AnalogueModels>
+
+
+</config>

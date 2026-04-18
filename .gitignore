@@ -1,0 +1,70 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# C/C++ build artifacts
+*.o
+*.so
+*.a
+*.out
+*.exe
+*.dll
+*.dylib
+
+# CMake / generic builds
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# OMNeT++ / simulation outputs
+results/
+out/
+*.vec
+*.vci
+*.sca
+*.elog
+
+# Logs
+logs/
+*.log
+omnetpp.log
+
+# Generated analysis artifacts
+*.pdf
+*.png
+*.csv
+*.Rdata
+
+# Virtual machines / big binary junk
+*.ova
+*.vdi
+*.vmdk
+*.qcow2
+
+# CARLA packaged simulator or large external deps
+CARLA_*/
+CarlaUE4/
+Unreal/
+dist/
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
