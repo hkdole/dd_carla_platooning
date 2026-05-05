@@ -4,7 +4,7 @@ import org.car2x.veins.base.connectionManager.ConnectionManager;
 import org.car2x.veins.base.modules.BaseWorldUtility;
 import inet.common.scenario.ScenarioManager;
 
-import carla.carlanetpp.CarlanetManager;
+import carlanet.CarlanetManager;
 import joinAtBack.CarlaPlatooningNode;
 
 network CarlaPlatooningNetwork

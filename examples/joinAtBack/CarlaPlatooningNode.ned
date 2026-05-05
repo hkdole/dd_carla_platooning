@@ -1,6 +1,6 @@
 package joinAtBack;
 
-import carla.carlanetpp.CarlaInetMobility;
+import carlanet.CarlaInetMobility;
 import carla.nic.CarlaNic80211p;
 import carla.apps.CarlaGeneralPlatooningApp;
 import carla.apps.BridgeApp;

@@ -2,7 +2,7 @@
 # OMNeT++/OMNEST Makefile for $(LIB_PREFIX)carla
 #
 # This file was generated with the command:
-#  opp_makemake --make-so -f --deep -o carla -O out -KINET4_5_PROJ=/home/rancher/omnet6_ws/omnetpp-6.0.3/platooning/inet4.5 -KVEINS_PROJ=../../veins -DINET_IMPORT -DVEINS_IMPORT -I. -I$$\(INET4_5_PROJ\)/src -I$$\(VEINS_PROJ\)/src -I. -L$$\(INET4_5_PROJ\)/src -L$$\(VEINS_PROJ\)/src -lzmq -lINET$$\(D\) -lveins$$\(D\)
+#  opp_makemake --make-so -f --deep -o carla -O out -KCARLANETPP_PROJ=../../carlanetpp -KINET4_5_PROJ=/home/rancher/omnet6_ws/omnetpp-6.0.3/platooning/inet4.5 -KVEINS_PROJ=../../veins -KPLEXE_PROJ=../../plexe -DINET_IMPORT -DPLEXE_IMPORT -DVEINS_IMPORT -I. -I$$\(CARLANETPP_PROJ\)/src -I$$\(INET4_5_PROJ\)/src -I$$\(VEINS_PROJ\)/src -I. -I$$\(PLEXE_PROJ\)/src -L$$\(CARLANETPP_PROJ\)/src -L$$\(INET4_5_PROJ\)/src -L$$\(PLEXE_PROJ\)/src -L$$\(VEINS_PROJ\)/src -lzmq -lcarlanet$$\(D\) -lINET$$\(D\) -lplexe$$\(D\) -lveins$$\(D\)
 #
 
 # Name of target to be created (-o option)
@@ -14,13 +14,19 @@ TARGET_IMPDEF = $(TARGET_NAME)$(IMPDEF_SUFFIX)
 TARGET_FILES = $(TARGET_DIR)/$(TARGET)
 
 # C++ include paths (with -I)
-INCLUDE_PATH = -I. -I$(INET4_5_PROJ)/src -I$(VEINS_PROJ)/src -I.
+INCLUDE_PATH = \
+    -I. \
+    -I$(CARLANETPP_PROJ)/src \
+    -I$(INET4_5_PROJ)/src \
+    -I$(VEINS_PROJ)/src \
+    -I. \
+    -I$(PLEXE_PROJ)/src
 
 # Additional object and library files to link with
 EXTRA_OBJS =
 
 # Additional libraries (-L, -l options)
-LIBS = $(LDFLAG_LIBPATH)$(INET4_5_PROJ)/src $(LDFLAG_LIBPATH)$(VEINS_PROJ)/src  -lzmq -lINET$(D) -lveins$(D)
+LIBS = $(LDFLAG_LIBPATH)$(CARLANETPP_PROJ)/src $(LDFLAG_LIBPATH)$(INET4_5_PROJ)/src $(LDFLAG_LIBPATH)$(PLEXE_PROJ)/src $(LDFLAG_LIBPATH)$(VEINS_PROJ)/src  -lzmq -lcarlanet$(D) -lINET$(D) -lplexe$(D) -lveins$(D)
 
 # Output directory
 PROJECT_OUTPUT_DIR = ../out
@@ -31,9 +37,6 @@ O = $(PROJECT_OUTPUT_DIR)/$(CONFIGNAME)/$(PROJECTRELATIVE_PATH)
 OBJS = \
     $O/carla/apps/BridgeApp.o \
     $O/carla/apps/CarlaGeneralPlatooningApp.o \
-    $O/carla/apps/CarlaPlexeApp.o \
-    $O/carla/carlanetpp/CarlaInetMobility.o \
-    $O/carla/carlanetpp/CarlanetManager.o \
     $O/carla/phy/CarlaPhyLayer80211p.o \
     $O/carla/platooning/controller/ControllerDispatcher.o \
     $O/carla/platooning/controller/FollowerCaccController.o \
@@ -42,45 +45,19 @@ OBJS = \
     $O/carla/platooning/maneuver/CarlaJoinAtBack.o \
     $O/carla/platooning/maneuver/CarlaJoinManeuver.o \
     $O/carla/platooning/maneuver/CarlaManeuver.o \
-    $O/carla/vis/SumoNetOverlay.o \
-    $O/carla/msg/CarlaManeuverMessage_m.o \
-    $O/carla/platooning/messages/InterferingBeacon_m.o \
-    $O/carla/platooning/messages/JoinFormation_m.o \
-    $O/carla/platooning/messages/JoinFormationAck_m.o \
-    $O/carla/platooning/messages/JoinPlatoonRequest_m.o \
-    $O/carla/platooning/messages/JoinPlatoonResponse_m.o \
-    $O/carla/platooning/messages/ManeuverMessage_m.o \
-    $O/carla/platooning/messages/MergePlatoonRequest_m.o \
-    $O/carla/platooning/messages/MoveToPosition_m.o \
-    $O/carla/platooning/messages/MoveToPositionAck_m.o \
-    $O/carla/platooning/messages/PlatooningBeacon_m.o \
-    $O/carla/platooning/messages/UpdatePlatoonData_m.o \
-    $O/carla/platooning/messages/UpdatePlatoonFormation_m.o \
-    $O/carla/platooning/messages/UpdatePlatoonFormationAck_m.o
+    $O/carla/vis/SumoNetOverlay.o
 
 # Message files
-MSGFILES = \
-    carla/msg/CarlaManeuverMessage.msg \
-    carla/platooning/messages/InterferingBeacon.msg \
-    carla/platooning/messages/JoinFormation.msg \
-    carla/platooning/messages/JoinFormationAck.msg \
-    carla/platooning/messages/JoinPlatoonRequest.msg \
-    carla/platooning/messages/JoinPlatoonResponse.msg \
-    carla/platooning/messages/ManeuverMessage.msg \
-    carla/platooning/messages/MergePlatoonRequest.msg \
-    carla/platooning/messages/MoveToPosition.msg \
-    carla/platooning/messages/MoveToPositionAck.msg \
-    carla/platooning/messages/PlatooningBeacon.msg \
-    carla/platooning/messages/UpdatePlatoonData.msg \
-    carla/platooning/messages/UpdatePlatoonFormation.msg \
-    carla/platooning/messages/UpdatePlatoonFormationAck.msg
+MSGFILES =
 
 # SM files
 SMFILES =
 
 # Other makefile variables (-K)
+CARLANETPP_PROJ=../../carlanetpp
 INET4_5_PROJ=/home/rancher/omnet6_ws/omnetpp-6.0.3/platooning/inet4.5
 VEINS_PROJ=../../veins
+PLEXE_PROJ=../../plexe
 
 #------------------------------------------------------------------------------
 
@@ -101,10 +78,10 @@ include $(CONFIGFILE)
 # Simulation kernel and user interface libraries
 OMNETPP_LIBS = -loppenvir$D $(KERNEL_LIBS) $(SYS_LIBS)
 ifneq ($(PLATFORM),win32)
-LIBS += -Wl,-rpath,$(abspath $(INET4_5_PROJ)/src) -Wl,-rpath,$(abspath $(VEINS_PROJ)/src)
+LIBS += -Wl,-rpath,$(abspath $(CARLANETPP_PROJ)/src) -Wl,-rpath,$(abspath $(INET4_5_PROJ)/src) -Wl,-rpath,$(abspath $(PLEXE_PROJ)/src) -Wl,-rpath,$(abspath $(VEINS_PROJ)/src)
 endif
 
-COPTS = $(CFLAGS) $(IMPORT_DEFINES) -DINET_IMPORT -DVEINS_IMPORT $(INCLUDE_PATH) -I$(OMNETPP_INCL_DIR)
+COPTS = $(CFLAGS) $(IMPORT_DEFINES) -DINET_IMPORT -DPLEXE_IMPORT -DVEINS_IMPORT $(INCLUDE_PATH) -I$(OMNETPP_INCL_DIR)
 MSGCOPTS = $(INCLUDE_PATH)
 SMCOPTS =
 

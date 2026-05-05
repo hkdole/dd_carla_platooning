@@ -5,8 +5,17 @@ pyCARLANeT main.py — CARLA↔OMNeT++ bridge for joinAtBack-style V2V simulatio
 STRICT protocol mode:
 - INIT must contain: user_defined.map and moving_actors (NOT map_name / actors)
 - GENERIC_MESSAGE must use: user_defined.msg_type, and for CONTROL: user_defined.actor_id + user_defined.ctrl
+- CONTROL ctrl must contain final CARLA actuator fields: throttle, brake, steer, hand_brake, reverse
 - CONTROL_BATCH entries must use: actor_id + ctrl
+- desired_acceleration / controller_acceleration / desired_speed are accepted as metadata only
 - seq/src/hop are read from user_defined (as OMNeT sends)
+
+Usage:
+Run
+cd ~/omnet6_ws/carla_platooning/pycarlanet/joinAtBack && python3 main.py 
+
+Capture logs:
+cd ~/omnet6_ws/carla_platooning/pycarlanet/joinAtBack && python3 main.py 2>&1 | tee pycarlanet.log
 """
 
 import json
@@ -70,25 +79,26 @@ SPAWN_Z_OFFSET_METERS = 0.75
 
 # Plexe-parity initial platoon:
 # fixed 5.0 m clearance gap + 4.5 m vehicle length = 9.5 m center spacing
-PLATOON_SPACING_METERS = 9.5
+PLATOON_GAP_METERS = float(os.getenv("PYCARLANET_PLATOON_GAP_M", "5.0"))
+PLATOON_VEHICLE_LENGTH_METERS = float(os.getenv("PYCARLANET_VEHICLE_LENGTH_M", "4.5"))
+
+# center-to-center spacing = bumper gap + vehicle length
+PLATOON_SPACING_METERS = PLATOON_GAP_METERS + PLATOON_VEHICLE_LENGTH_METERS
 PLATOON_LATERAL_JITTER_METERS = 0.25
 PLATOON_MAX_LANESIDE_TRIES = 7
 
 LATE_SPAWN_BACK_METERS = float(os.getenv("PYCARLANET_LATE_SPAWN_BACK_M", "0.0"))
 
 HOLD_BRAKE_UNTIL_CONTROL = True
-THROTTLE_GAIN_PER_MPS2 = 0.15
-BRAKE_GAIN_PER_MPS2 = 0.20
 
-SPEED_ERROR_TO_ACCELERATION_KP = 1.2
-MAX_ACCELERATION_COMMAND_MPS2 = 2.5
-MAX_BRAKE_COMMAND_MPS2 = -4.0
+# Strict bridge mode:
+# OMNeT++ must send final CARLA actuator fields.
 
 EXIT_ON_FINISH = True
 FREEZE_VEHICLES_ON_FINISH = True
 FORCE_ASYNC_ON_RESTORE = True
 
-ENABLE_LANE_KEEPING = True
+ENABLE_LANE_KEEPING = _env_bool("PYCARLANET_ENABLE_PY_LANE_KEEPING", True)
 LANE_KEEP_LOOKAHEAD_METERS = 12.0
 LANE_KEEP_KP = 0.9
 
@@ -96,17 +106,6 @@ LATE_SPAWN_USE_INIT_LEADER_ANCHOR = True
 LATE_SPAWN_INIT_LEADER_BACK_METERS = float(os.getenv("PYCARLANET_LATE_SPAWN_INIT_LEADER_BACK_M", "0.0"))
 LATE_SPAWN_INIT_LEADER_EXTRA_BACKOFFS = (0.0, 20.0, 40.0, 60.0)
 LATE_SPAWN_ONLY_FOR_MAP = "Town04"
-
-ENABLE_LEADER_PROFILE = False
-LEADER_ACTOR_ID = "veh0"
-LEADER_PULSE_PERIOD_SECONDS = 1.0
-LEADER_PULSE_BRAKE_SECONDS = 0.0
-LEADER_BRAKE_ACCELERATION_MPS2 = 0.0
-LEADER_CRUISE_ACCELERATION_MPS2 = 2.0
-LEADER_START_IN_CRUISE = True
-
-MINIMUM_LAUNCH_SPEED_MPS = 0.5
-MINIMUM_LAUNCH_THROTTLE = 0.25
 
 LATE_SPAWN_USE_HARDCODED_TOWN04_ANCHOR = True
 LATE_SPAWN_HARDCODED_BACK_METERS = 100.0
@@ -173,9 +172,6 @@ INIT_SETTLE_STABLE_FRAMES = int(os.getenv("PYCARLANET_INIT_SETTLE_STABLE_FRAMES"
 INIT_SETTLE_VZ_EPS = float(os.getenv("PYCARLANET_INIT_SETTLE_VZ_EPS", "0.08"))   # m/s
 INIT_SETTLE_DZ_EPS = float(os.getenv("PYCARLANET_INIT_SETTLE_DZ_EPS", "0.01"))   # m per tick
 
-# CURVATURE_DS_METERS = float(os.getenv("PYCARLANET_CURVATURE_DS_M", "3.0"))
-# CURVATURE_RADIUS_STRAIGHT_M = float(os.getenv("PYCARLANET_CURVATURE_STRAIGHT_M", "1000000.0"))
-# CURVATURE_RADIUS_MIN_M = float(os.getenv("PYCARLANET_CURVATURE_MIN_M", "1.0"))
 
 def clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
     if value < minimum:
@@ -200,11 +196,16 @@ def wrap_to_pi(radians_value: float) -> float:
     return radians_value
 
 
-def safe_float(value, default: float = 0.0) -> float:
+def safe_float(value, default: float = 0.0):
     try:
         return float(value)
     except Exception:
-        return float(default)
+        if default is None:
+            return None
+        try:
+            return float(default)
+        except Exception:
+            return 0.0
 
 
 def safe_int(value, default: int = 0) -> int:
@@ -212,6 +213,21 @@ def safe_int(value, default: int = 0) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def safe_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off"):
+        return False
+    return bool(default)
 
 
 # -------------------- Raw JSON monitor --------------------
@@ -224,7 +240,6 @@ class RawJsonMonitor:
         self._last_sig_by_key = {}         # (direction,key)->sig
         self._last_time_by_key = {}        # (direction,key)->t
         self._last_step_raw_time = None    # sim time gating
-        self.initial_spacing_m = float(PLATOON_SPACING_METERS)
 
     @staticmethod
     def _raw_event(direction: str, *, actor: bool = False) -> str:
@@ -288,7 +303,8 @@ class RawJsonMonitor:
 
         volatile_keys = {
             "timestamp", "initial_timestamp",
-            "position", "velocity", "rotation",
+            "position", "velocity", "acceleration", "actual_acceleration",
+            "rotation", "angular_velocity", "control",
         }
 
         if isinstance(obj, dict):
@@ -430,38 +446,6 @@ class RawJsonMonitor:
 
 
 # -------------------- CARLA helpers --------------------
-def choose_spawn_point_near_spectator(world, seed: int):
-    """
-    Pick a CARLA spawn point nearest to the spectator camera (XY distance).
-    If spectator is unavailable, fall back to seed-based spawn.
-    """
-    spawn_points = list(world.get_map().get_spawn_points())
-    if not spawn_points:
-        return None
-
-    # Fallback: stable seed-based choice
-    fallback = spawn_points[int(seed) % len(spawn_points)]
-
-    try:
-        spec = world.get_spectator()
-        anchor = spec.get_transform().location
-        ax = float(anchor.x)
-        ay = float(anchor.y)
-    except Exception:
-        return fallback
-
-    best = None
-    best_d2 = None
-    for t in spawn_points:
-        dx = float(t.location.x) - ax
-        dy = float(t.location.y) - ay
-        d2 = dx * dx + dy * dy
-        if best_d2 is None or d2 < best_d2:
-            best_d2 = d2
-            best = t
-
-    return best or fallback
-
 def compute_lane_keep_steering(world, vehicle_actor) -> float:
     map_object = world.get_map()
 
@@ -522,6 +506,13 @@ def compute_lane_keep_steering(world, vehicle_actor) -> float:
 
 
 def pick_spawn_transforms(world, actor_count: int, seed: int, spacing_meters: float, z_offset_meters: float):
+    """
+    Spawn the initial platoon on the same CARLA driving lane at exact
+    center-to-center spacing along the lane centerline.
+
+    This avoids artificial startup compression caused by straight-line
+    XY offsets on curved road geometry.
+    """
     spawn_points = list(world.get_map().get_spawn_points())
     if not spawn_points:
         base_transform = carla.Transform(
@@ -532,35 +523,104 @@ def pick_spawn_transforms(world, actor_count: int, seed: int, spacing_meters: fl
 
     base_spawn = spawn_points[int(seed) % len(spawn_points)]
 
-    # HARD-CODED forward push: no env var, no knob
+    # Perform forward shift through lane waypoints.
     base_spawn = advance_transform_forward_on_same_lane(world, base_spawn, 625.0)
 
-    base_location = base_spawn.location
-    base_rotation = base_spawn.rotation
-    yaw_degrees = float(base_rotation.yaw)
-    forward, _ = yaw_forward_and_right_vectors(yaw_degrees)
+    map_object = world.get_map()
 
-    base_x = float(base_location.x)
-    base_y = float(base_location.y)
-    base_z = float(base_location.z) + float(z_offset_meters)
+    try:
+        leader_wp = map_object.get_waypoint(
+            base_spawn.location,
+            project_to_road=True,
+            lane_type=carla.LaneType.Driving,
+        )
+    except Exception:
+        leader_wp = None
+
+    if leader_wp is None:
+        # Fallback to the old straight-line method if CARLA waypoint lookup fails.
+        base_location = base_spawn.location
+        base_rotation = base_spawn.rotation
+        yaw_degrees = float(base_rotation.yaw)
+        forward, _ = yaw_forward_and_right_vectors(yaw_degrees)
+
+        transforms = []
+        for index in range(actor_count):
+            back_distance = float(index) * float(spacing_meters)
+            transforms.append(
+                carla.Transform(
+                    carla.Location(
+                        x=float(base_location.x) - back_distance * forward[0],
+                        y=float(base_location.y) - back_distance * forward[1],
+                        z=float(base_location.z) + float(z_offset_meters),
+                    ),
+                    carla.Rotation(
+                        pitch=float(base_rotation.pitch),
+                        yaw=yaw_degrees,
+                        roll=float(base_rotation.roll),
+                    ),
+                )
+            )
+        return transforms
+
+    def pick_same_lane(candidates, ref_wp):
+        if not candidates:
+            return None
+        for wp in candidates:
+            try:
+                if wp.road_id == ref_wp.road_id and wp.lane_id == ref_wp.lane_id:
+                    return wp
+            except Exception:
+                pass
+        return candidates[0]
+
+    def walk_backward(start_wp, distance_m: float):
+        current_wp = start_wp
+        remaining = float(distance_m)
+        step_m = 2.0
+
+        while remaining > 1e-6:
+            step = min(step_m, remaining)
+            try:
+                candidates = current_wp.previous(step)
+            except Exception:
+                candidates = None
+
+            if not candidates:
+                break
+
+            next_wp = pick_same_lane(candidates, current_wp)
+            if next_wp is None:
+                break
+
+            current_wp = next_wp
+            remaining -= step
+
+        return current_wp
 
     transforms = []
+
     for index in range(actor_count):
         back_distance = float(index) * float(spacing_meters)
-        location_x = base_x - back_distance * forward[0]
-        location_y = base_y - back_distance * forward[1]
-        location_z = base_z
+        wp = walk_backward(leader_wp, back_distance)
 
-        transforms.append(
-            carla.Transform(
-                carla.Location(x=location_x, y=location_y, z=location_z),
-                carla.Rotation(
-                    pitch=float(base_rotation.pitch),
-                    yaw=yaw_degrees,
-                    roll=float(base_rotation.roll),
-                ),
-            )
+        if wp is None:
+            wp = leader_wp
+
+        t = wp.transform
+        spawn_transform = carla.Transform(
+            carla.Location(
+                x=float(t.location.x),
+                y=float(t.location.y),
+                z=float(t.location.z) + float(z_offset_meters),
+            ),
+            carla.Rotation(
+                pitch=float(t.rotation.pitch),
+                yaw=float(t.rotation.yaw),
+                roll=float(t.rotation.roll),
+            ),
         )
+        transforms.append(spawn_transform)
 
     log(
         "CARLA",
@@ -568,10 +628,13 @@ def pick_spawn_transforms(world, actor_count: int, seed: int, spacing_meters: fl
         "",
         actor_count=int(actor_count),
         spacing_m=float(spacing_meters),
+        gap_m=float(PLATOON_GAP_METERS),
+        vehicle_length_m=float(PLATOON_VEHICLE_LENGTH_METERS),
+        lane_walked=True,
         hardcoded_forward_shift_m=625.0,
-        base_x=float(base_x),
-        base_y=float(base_y),
-        base_yaw=float(yaw_degrees),
+        base_x=float(transforms[0].location.x),
+        base_y=float(transforms[0].location.y),
+        base_yaw=float(transforms[0].rotation.yaw),
     )
 
     return transforms
@@ -630,149 +693,6 @@ def advance_transform_forward_on_same_lane(world, base_transform, forward_distan
     except Exception:
         return base_transform
     
-def move_transform_along_same_lane(world, base_transform, signed_distance_m: float):
-    """
-    Move a transform along its current driving lane.
-    Positive distance = forward on lane
-    Negative distance = backward on lane
-
-    Keeps the same travel direction semantics as the current lane.
-    """
-    if abs(float(signed_distance_m)) <= 1e-6:
-        return base_transform
-
-    try:
-        map_object = world.get_map()
-        start_wp = map_object.get_waypoint(
-            base_transform.location,
-            project_to_road=True,
-            lane_type=carla.LaneType.Driving,
-        )
-        if start_wp is None:
-            return base_transform
-
-        current_wp = start_wp
-        remaining = abs(float(signed_distance_m))
-        step_m = 4.0
-
-        while remaining > 1e-6:
-            step = min(step_m, remaining)
-
-            if signed_distance_m >= 0.0:
-                candidates = current_wp.next(step)
-            else:
-                candidates = current_wp.previous(step)
-
-            if not candidates:
-                break
-
-            next_wp = None
-            for wp in candidates:
-                try:
-                    if wp.road_id == current_wp.road_id and wp.lane_id == current_wp.lane_id:
-                        next_wp = wp
-                        break
-                except Exception:
-                    pass
-
-            if next_wp is None:
-                next_wp = candidates[0]
-
-            current_wp = next_wp
-            remaining -= step
-
-        out = current_wp.transform
-
-        # Preserve the caller's relative Z offset above the lane centerline.
-        out.location.z = float(out.location.z) + (
-            float(base_transform.location.z) - float(start_wp.transform.location.z)
-        )
-
-        # Preserve the original yaw/pitch/roll so we do not accidentally flip direction.
-        out.rotation = carla.Rotation(
-            pitch=float(base_transform.rotation.pitch),
-            yaw=float(base_transform.rotation.yaw),
-            roll=float(base_transform.rotation.roll),
-        )
-        return out
-
-    except Exception:
-        return base_transform
-
-# def _pick_same_lane_waypoint(candidates, ref_wp):
-#     if not candidates:
-#         return None
-#     for w in candidates:
-#         try:
-#             if w.road_id == ref_wp.road_id and w.lane_id == ref_wp.lane_id:
-#                 return w
-#         except Exception:
-#             continue
-#     return candidates[0]
-
-
-# def _circumradius_from_3_xy(p1, p2, p3, straight_radius=CURVATURE_RADIUS_STRAIGHT_M):
-#     # p1/p2/p3 are (x,y) tuples
-#     x1, y1 = p1
-#     x2, y2 = p2
-#     x3, y3 = p3
-
-#     a = math.hypot(x2 - x3, y2 - y3)
-#     b = math.hypot(x1 - x3, y1 - y3)
-#     c = math.hypot(x1 - x2, y1 - y2)
-
-#     s = 0.5 * (a + b + c)
-#     A2 = s * (s - a) * (s - b) * (s - c)  # Heron inside sqrt
-
-#     if A2 <= 1e-12:
-#         return float(straight_radius)
-
-#     A = math.sqrt(A2)
-#     R = (a * b * c) / (4.0 * A)
-#     if not math.isfinite(R) or R <= 0.0:
-#         return float(straight_radius)
-#     return float(R)
-
-
-# def curvature_radius_from_carla_map(world, vehicle_actor, ds_m=CURVATURE_DS_METERS):
-#     """
-#     Estimate local lane-centerline curvature radius (meters) at vehicle location.
-#     Uses 3 CARLA waypoints: previous(ds), current, next(ds) on same lane if possible.
-#     Returns a finite number; uses CURVATURE_RADIUS_STRAIGHT_M when degenerate.
-#     """
-#     if world is None or vehicle_actor is None:
-#         return float(CURVATURE_RADIUS_STRAIGHT_M)
-
-#     try:
-#         m = world.get_map()
-#         loc = vehicle_actor.get_location()
-#         wp0 = m.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
-#     except Exception:
-#         return float(CURVATURE_RADIUS_STRAIGHT_M)
-
-#     if wp0 is None:
-#         return float(CURVATURE_RADIUS_STRAIGHT_M)
-
-#     try:
-#         wpF = _pick_same_lane_waypoint(wp0.next(float(ds_m)), wp0)
-#         wpB = _pick_same_lane_waypoint(wp0.previous(float(ds_m)), wp0)
-#     except Exception:
-#         return float(CURVATURE_RADIUS_STRAIGHT_M)
-
-#     if wpF is None or wpB is None:
-#         return float(CURVATURE_RADIUS_STRAIGHT_M)
-
-#     pB = (float(wpB.transform.location.x), float(wpB.transform.location.y))
-#     p0 = (float(wp0.transform.location.x), float(wp0.transform.location.y))
-#     pF = (float(wpF.transform.location.x), float(wpF.transform.location.y))
-
-#     R = _circumradius_from_3_xy(pB, p0, pF, straight_radius=CURVATURE_RADIUS_STRAIGHT_M)
-#     if R < float(CURVATURE_RADIUS_MIN_M):
-#         R = float(CURVATURE_RADIUS_MIN_M)
-#     if R > float(CURVATURE_RADIUS_STRAIGHT_M):
-#         R = float(CURVATURE_RADIUS_STRAIGHT_M)
-
-#     return float(R)
 
 class Bridge:
     def __init__(self):
@@ -802,11 +722,8 @@ class Bridge:
         self.last_telemetry_print_time_seconds = -1e9
         self.last_step_logged_timestamp = None
 
-        self.enable_leader_profile = bool(ENABLE_LEADER_PROFILE)
-        self.enable_follower_fallback = False
-        self.max_brake_command_mps2 = float(MAX_BRAKE_COMMAND_MPS2)
-        self.follow_max_brake_mps2 = float(MAX_BRAKE_COMMAND_MPS2)
         self.hold_brake_until_control = bool(HOLD_BRAKE_UNTIL_CONTROL)
+        self.initial_spacing_m = float(PLATOON_SPACING_METERS)
 
     # -------------------- INIT settling gate helpers --------------------
     @staticmethod
@@ -1071,58 +988,6 @@ class Bridge:
             stable_frames_reached=stable_count,
         )
 
-    def compute_late_spawn_transform(self, actor_id: str):
-        """
-        Spawn a late joiner behind the CURRENT rear platoon vehicle,
-        not behind the original t=0 spawn layout.
-        """
-        ordered_ids = self.sorted_vehicle_ids(list(self.actors_by_id.keys()))
-        if not ordered_ids:
-            if self.initial_base_transform is None:
-                raise RuntimeError("No existing actors and no initial base transform available")
-            return self.initial_base_transform
-
-        rear_id = ordered_ids[-1]
-        rear_actor = self.actors_by_id[rear_id]
-        rear_tf = rear_actor.get_transform()
-
-        back_m = float(LATE_SPAWN_BACK_METERS)
-        if back_m <= 0.0:
-            back_m = 10.0
-
-        spawn_tf = move_transform_along_same_lane(self.world, rear_tf, -back_m)
-
-        # Force exact heading match with the rear vehicle.
-        spawn_tf = carla.Transform(
-            carla.Location(
-                x=float(spawn_tf.location.x),
-                y=float(spawn_tf.location.y),
-                z=float(spawn_tf.location.z),
-            ),
-            carla.Rotation(
-                pitch=float(rear_tf.rotation.pitch),
-                yaw=float(rear_tf.rotation.yaw),
-                roll=float(rear_tf.rotation.roll),
-            ),
-        )
-
-        log(
-            "SPAWN",
-            "LATE_SPAWN_LAYOUT",
-            "",
-            actor=actor_id,
-            rear_actor=rear_id,
-            back_m=float(back_m),
-            rear_x=float(rear_tf.location.x),
-            rear_y=float(rear_tf.location.y),
-            rear_yaw=float(rear_tf.rotation.yaw),
-            spawn_x=float(spawn_tf.location.x),
-            spawn_y=float(spawn_tf.location.y),
-            spawn_yaw=float(spawn_tf.rotation.yaw),
-        )
-
-        return spawn_tf
-    
     def _pick_same_lane_waypoint(self, candidates, ref_wp):
         if not candidates:
             return None
@@ -1525,8 +1390,15 @@ class Bridge:
 
             self.control_targets_by_actor_id[actor_id] = {
                 "has_control": (not self.hold_brake_until_control),
-                "desired_acceleration": 0.0,
+                "throttle": 0.0,
+                "brake": 0.0,
+                "steer": 0.0,
+                "hand_brake": False,
+                "reverse": False,
+                "manual_gear_shift": False,
                 "desired_speed": 0.0,
+                "desired_acceleration": 0.0,
+                "controller_acceleration": 0.0,
             }
 
             self.control_update_pending_for_actor_ids.add(actor_id)
@@ -1763,23 +1635,59 @@ class Bridge:
 
     @staticmethod
     def snapshot_actor(actor_id: str, actor):
+        """
+        Return raw CARLA state for OMNeT++.
+
+        This intentionally does not compute platoon quantities such as gap,
+        relative speed, headway, TTC, or longitudinal acceleration projection.
+        OMNeT++ receives raw vectors and decides how to derive/control them.
+        """
         transform = actor.get_transform()
         velocity = actor.get_velocity()
-        return {
+
+        try:
+            acceleration = actor.get_acceleration()
+        except Exception:
+            acceleration = carla.Vector3D(0.0, 0.0, 0.0)
+
+        try:
+            angular_velocity = actor.get_angular_velocity()
+        except Exception:
+            angular_velocity = carla.Vector3D(0.0, 0.0, 0.0)
+
+        control_payload = None
+        try:
+            if hasattr(actor, "get_control"):
+                c = actor.get_control()
+                control_payload = {
+                    "throttle": float(getattr(c, "throttle", 0.0)),
+                    "brake": float(getattr(c, "brake", 0.0)),
+                    "steer": float(getattr(c, "steer", 0.0)),
+                    "hand_brake": bool(getattr(c, "hand_brake", False)),
+                    "reverse": bool(getattr(c, "reverse", False)),
+                    "manual_gear_shift": bool(getattr(c, "manual_gear_shift", False)),
+                    "gear": int(getattr(c, "gear", 0)),
+                }
+        except Exception:
+            control_payload = None
+
+        snapshot = {
             "actor_id": actor_id,
             "position": [float(transform.location.x), float(transform.location.y), float(transform.location.z)],
             "velocity": [float(velocity.x), float(velocity.y), float(velocity.z)],
+            # Keep both names so existing parsers can use "acceleration" while
+            # OMNeT++ controller code can explicitly look for "actual_acceleration".
+            "acceleration": [float(acceleration.x), float(acceleration.y), float(acceleration.z)],
+            "actual_acceleration": [float(acceleration.x), float(acceleration.y), float(acceleration.z)],
             "rotation": [float(transform.rotation.pitch), float(transform.rotation.yaw), float(transform.rotation.roll)],
+            "angular_velocity": [float(angular_velocity.x), float(angular_velocity.y), float(angular_velocity.z)],
             "is_net_active": True,
         }
 
-    @staticmethod
-    def speed_mps(actor) -> float:
-        try:
-            velocity = actor.get_velocity()
-            return math.sqrt(float(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z))
-        except Exception:
-            return 0.0
+        if control_payload is not None:
+            snapshot["control"] = control_payload
+
+        return snapshot
 
     @staticmethod
     def sorted_vehicle_ids(actor_ids):
@@ -1789,120 +1697,103 @@ class Bridge:
             return (1, actor_id)
         return sorted(actor_ids, key=sort_key)
 
-    def gap_relative_speed_headway_to_leader(self, ordered_actor_ids: list, index: int):
-        if index <= 0:
-            return None, None, None
-
-        follower_id = ordered_actor_ids[index]
-        leader_id = ordered_actor_ids[index - 1]
-        follower = self.actors_by_id.get(follower_id)
-        leader = self.actors_by_id.get(leader_id)
-        if follower is None or leader is None:
-            return None, None, None
-
-        try:
-            follower_location = follower.get_transform().location
-            leader_location = leader.get_transform().location
-            dx = float(leader_location.x - follower_location.x)
-            dy = float(leader_location.y - follower_location.y)
-            gap = math.sqrt(dx * dx + dy * dy)
-
-            follower_speed = self.speed_mps(follower)
-            leader_speed = self.speed_mps(leader)
-            relative_speed = follower_speed - leader_speed
-
-            headway = (gap / follower_speed) if follower_speed > 0.1 else None
-            return gap, relative_speed, headway
-        except Exception:
-            return None, None, None
-
-    # def snapshot_actor_with_radius(self, actor_id: str, actor):
-    #     snap = Bridge.snapshot_actor(actor_id, actor)  # keep existing fields
-    #     try:
-    #         snap["radius"] = float(curvature_radius_from_carla_map(self.world, actor, CURVATURE_DS_METERS))
-    #     except Exception:
-    #         snap["radius"] = float(CURVATURE_RADIUS_STRAIGHT_M)
-    #     return snap
-
     # -------------------- control --------------------
-    def acceleration_command_from_target(self, actor, target_control: dict) -> float:
+    @staticmethod
+    def _target_has_actuator_fields(target_control: dict) -> bool:
         if not isinstance(target_control, dict):
-            return 0.0
+            return False
 
-        if "desired_acceleration" in target_control:
-            return safe_float(target_control.get("desired_acceleration", 0.0), 0.0)
+        # Longitudinal actuator fields only.
+        # Steering is intentionally excluded because Python lane keeping owns lateral control.
+        actuator_keys = ("throttle", "brake", "hand_brake", "reverse", "manual_gear_shift")
+        return any(key in target_control for key in actuator_keys)
 
-        if "desired_speed" in target_control:
-            desired_speed = safe_float(target_control.get("desired_speed", 0.0), 0.0)
-            current_speed = self.speed_mps(actor)
-            acceleration_command = float(SPEED_ERROR_TO_ACCELERATION_KP) * (desired_speed - current_speed)
+    @staticmethod
+    def _build_vehicle_control_from_target(
+        target_control: dict,
+        *,
+        hold_brake_active: bool,
+        steering: float,
+    ):
+        """
+        Build CARLA VehicleControl.
 
-            if acceleration_command > float(MAX_ACCELERATION_COMMAND_MPS2):
-                acceleration_command = float(MAX_ACCELERATION_COMMAND_MPS2)
-            if acceleration_command < float(self.max_brake_command_mps2):
-                acceleration_command = float(self.max_brake_command_mps2)
+        Architecture:
+        - OMNeT++ owns longitudinal actuation: throttle/brake/hand_brake.
+        - Python owns only lateral lane keeping: steer.
+        - Python still does NOT convert desired_acceleration to throttle/brake.
+        """
+        if hold_brake_active:
+            return carla.VehicleControl(
+                throttle=0.0,
+                brake=1.0,
+                steer=0.0,
+                hand_brake=True,
+                reverse=False,
+                manual_gear_shift=False,
+            )
 
-            return acceleration_command
+        if not isinstance(target_control, dict):
+            target_control = {}
 
-        return 0.0
+        return carla.VehicleControl(
+            throttle=clamp(safe_float(target_control.get("throttle", 0.0), 0.0), 0.0, 1.0),
+            brake=clamp(safe_float(target_control.get("brake", 0.0), 0.0), 0.0, 1.0),
 
+            # Important: use Python lane keeping, not ctrl["steer"] default 0.0.
+            steer=clamp(float(steering), -1.0, 1.0),
+
+            hand_brake=safe_bool(target_control.get("hand_brake", False), False),
+            reverse=safe_bool(target_control.get("reverse", False), False),
+            manual_gear_shift=safe_bool(target_control.get("manual_gear_shift", False), False),
+        )
+    
     def apply_controls(self):
         ordered_actor_ids = self.sorted_vehicle_ids(list(self.actors_by_id.keys()))
 
-        for index, actor_id in enumerate(ordered_actor_ids):
+        for actor_id in ordered_actor_ids:
             actor = self.actors_by_id[actor_id]
 
             target_control = self.control_targets_by_actor_id.get(actor_id)
             if target_control is None:
                 target_control = {
                     "has_control": (not self.hold_brake_until_control),
-                    "desired_acceleration": 0.0,
+                    "throttle": 0.0,
+                    "brake": 0.0,
+                    "hand_brake": False,
+                    "reverse": False,
+                    "manual_gear_shift": False,
                     "desired_speed": 0.0,
+                    "desired_acceleration": 0.0,
+                    "controller_acceleration": 0.0,
                 }
                 self.control_targets_by_actor_id[actor_id] = target_control
 
+            has_control = safe_bool(target_control.get("has_control", False), False)
+            hold_brake_active = bool(self.hold_brake_until_control and not has_control)
+
+            # Restore the behavior that worked: Python computes lateral lane keeping.
+            # This is not platoon logic. It is CARLA execution/lateral stabilization.
             steering = 0.0
-            if ENABLE_LANE_KEEPING and self.world is not None:
+            if ENABLE_LANE_KEEPING and self.world is not None and not hold_brake_active:
                 try:
                     steering = compute_lane_keep_steering(self.world, actor)
                 except Exception:
                     steering = 0.0
 
-            desired_acceleration = safe_float(target_control.get("desired_acceleration", 0.0), 0.0)
+            vehicle_control = self._build_vehicle_control_from_target(
+                target_control,
+                hold_brake_active=hold_brake_active,
+                steering=steering,
+            )
+
             desired_speed = safe_float(target_control.get("desired_speed", 0.0), 0.0)
-            acceleration_command = self.acceleration_command_from_target(actor, target_control)
+            desired_acceleration = safe_float(target_control.get("desired_acceleration", 0.0), 0.0)
+            controller_acceleration = safe_float(
+                target_control.get("controller_acceleration", desired_acceleration),
+                desired_acceleration,
+            )
 
-            hold_brake_active = False
-            if self.hold_brake_until_control and (not bool(target_control.get("has_control", False))):
-                hold_brake_active = True
-
-            if hold_brake_active:
-                throttle = 0.0
-                brake = 1.0
-            else:
-                if acceleration_command >= 0.0:
-                    throttle = clamp(acceleration_command * THROTTLE_GAIN_PER_MPS2)
-                    brake = 0.0
-                else:
-                    throttle = 0.0
-                    brake = clamp((-acceleration_command) * BRAKE_GAIN_PER_MPS2)
-
-                current_speed = self.speed_mps(actor)
-                if current_speed < float(MINIMUM_LAUNCH_SPEED_MPS) and throttle > 0.0:
-                    throttle = max(float(throttle), float(MINIMUM_LAUNCH_THROTTLE))
-                    brake = 0.0
-
-            speed = self.speed_mps(actor)
-            gap, relv, headway = self.gap_relative_speed_headway_to_leader(ordered_actor_ids, index)
-
-            # If controller target is STOP, actively hold the vehicle stopped.
-            # Do not allow zero-speed/zero-accel targets to become a "coast" command.
-            if (not hold_brake_active):
-                if abs(desired_speed) < 1e-3 and abs(desired_acceleration) < 1e-3:
-                    throttle = 0.0
-                    brake = 1.0
-                    hold_brake_active = True
-                    
             if LOG_ALL:
                 should_log_apply = True
             else:
@@ -1930,31 +1821,26 @@ class Bridge:
                     step=int(self.step_index),
                     actor=actor_id,
                     simulation_time=float(self.simulation_time_seconds),
+                    throttle=float(vehicle_control.throttle),
+                    brake=float(vehicle_control.brake),
+                    steer=float(vehicle_control.steer),
+                    hand_brake=bool(vehicle_control.hand_brake),
+                    reverse=bool(vehicle_control.reverse),
+                    manual_gear_shift=bool(vehicle_control.manual_gear_shift),
+                    hold_brake_active=bool(hold_brake_active),
                     desired_speed=float(desired_speed),
                     desired_acceleration=float(desired_acceleration),
-                    acceleration_command=float(acceleration_command),
-                    throttle=float(throttle),
-                    brake=float(brake),
-                    steering=float(steering),
-                    hold_brake_active=bool(hold_brake_active),
-                    speed=float(speed),
-                    gap_to_leader=gap,
-                    relative_speed_to_leader=relv,
-                    headway=headway,
+                    controller_acceleration=float(controller_acceleration),
+                    desired_acceleration_used_by_python=False,
+                    desired_speed_used_by_python=False,
+                    python_derived_longitudinal_control=False,
+                    python_lane_keeping_used=bool(ENABLE_LANE_KEEPING),
+                    command_source="OMNET_LONGITUDINAL_WITH_PY_LANE_KEEPING",
                     hop="PY_APPLY_TO_CARLA",
                 )
 
             try:
-                actor.apply_control(
-                    carla.VehicleControl(
-                        throttle=float(throttle),
-                        brake=float(brake),
-                        steer=float(steering),
-                        hand_brake=bool(hold_brake_active),
-                        reverse=False,
-                        manual_gear_shift=False,
-                    )
-                )
+                actor.apply_control(vehicle_control)
             except Exception:
                 pass
 
@@ -1962,23 +1848,28 @@ class Bridge:
             float(self.simulation_time_seconds) - float(self.last_telemetry_print_time_seconds) >= float(TELEMETRY_PERIOD_SECONDS)
         ):
             self.last_telemetry_print_time_seconds = float(self.simulation_time_seconds)
-            for index, actor_id in enumerate(ordered_actor_ids):
+
+            for actor_id in ordered_actor_ids:
                 actor = self.actors_by_id.get(actor_id)
                 if actor is None:
                     continue
-                speed = self.speed_mps(actor)
-                gap, relv, headway = self.gap_relative_speed_headway_to_leader(ordered_actor_ids, index)
-                log(
-                    "TELEMETRY",
-                    "STATE",
-                    "",
-                    actor=actor_id,
-                    simulation_time=float(self.simulation_time_seconds),
-                    speed=float(speed),
-                    gap_to_leader=gap,
-                    relative_speed_to_leader=relv,
-                    headway=headway,
-                )
+
+                try:
+                    snapshot = self.snapshot_actor(actor_id, actor)
+                    log(
+                        "TELEMETRY",
+                        "STATE",
+                        "",
+                        actor=actor_id,
+                        simulation_time=float(self.simulation_time_seconds),
+                        position=snapshot.get("position"),
+                        velocity=snapshot.get("velocity"),
+                        actual_acceleration=snapshot.get("actual_acceleration"),
+                        rotation=snapshot.get("rotation"),
+                        angular_velocity=snapshot.get("angular_velocity"),
+                    )
+                except Exception:
+                    pass
 
     def freeze_all_vehicles(self):
         for actor_id, actor in self.actors_by_id.items():
@@ -2012,7 +1903,7 @@ class Bridge:
     # -------------------- protocol handlers --------------------
     def handle_init(self, message: dict):
         self.simulation_time_seconds = safe_float(message.get("timestamp", 0.0), 0.0)
-
+        self.initial_spacing_m = float(PLATOON_SPACING_METERS)
         self.step_index = 0
         self._forced_apply_log_step = -1
 
@@ -2089,8 +1980,6 @@ class Bridge:
                 pitch=float(self.initial_base_transform.rotation.pitch),
                 roll=float(self.initial_base_transform.rotation.roll),
             )
-        
-        self.initial_spacing_m = float(PLATOON_SPACING_METERS)
 
         self.control_update_pending_for_actor_ids.clear()
         self.first_apply_logged_for_actor_ids.clear()
@@ -2113,8 +2002,15 @@ class Bridge:
             self.actors_by_id[actor_id] = actor
             self.control_targets_by_actor_id[actor_id] = {
                 "has_control": (not self.hold_brake_until_control),
-                "desired_acceleration": 0.0,
+                "throttle": 0.0,
+                "brake": 0.0,
+                "steer": 0.0,
+                "hand_brake": False,
+                "reverse": False,
+                "manual_gear_shift": False,
                 "desired_speed": 0.0,
+                "desired_acceleration": 0.0,
+                "controller_acceleration": 0.0,
             }
             spawned_actor_ids.append(actor_id)
 
@@ -2188,7 +2084,6 @@ class Bridge:
 
         ordered_ids = self.sorted_vehicle_ids(list(self.actors_by_id.keys()))
         actor_positions = [self.snapshot_actor(actor_id, self.actors_by_id[actor_id]) for actor_id in ordered_ids]
-        # actor_positions = [self.snapshot_actor_with_radius(actor_id, self.actors_by_id[actor_id]) for actor_id in ordered_ids]
         return self.resp_updated_positions(actor_positions, SIM_STATUS_RUNNING)
 
     def ingest_control_for_actor(
@@ -2206,36 +2101,63 @@ class Bridge:
         if not isinstance(control_payload, dict):
             control_payload = {}
 
-        has_accel_key = "desired_acceleration" in control_payload
-        has_speed_key = "desired_speed" in control_payload
-
-        desired_acceleration_value = control_payload.get("desired_acceleration", None)
-        desired_speed_value = control_payload.get("desired_speed", None)
-        explicit_has_control = control_payload.get("has_control", None)
-
         previous = self.control_targets_by_actor_id.get(actor_id)
         if not isinstance(previous, dict):
             previous = {}
 
         new_target = dict(previous)
 
+        # Longitudinal authority only. Steering is handled by Python lane keeping.
+        actuator_keys = (
+            "throttle",
+            "brake",
+            "hand_brake",
+            "reverse",
+            "manual_gear_shift",
+        )
+        metadata_float_keys = (
+            "desired_speed",
+            "desired_acceleration",
+            "controller_acceleration",
+        )
+
+        for key in ("throttle", "brake"):
+            if key in control_payload and control_payload.get(key) is not None:
+                new_target[key] = clamp(safe_float(control_payload.get(key), 0.0), 0.0, 1.0)
+
+        for key in ("hand_brake", "reverse", "manual_gear_shift"):
+            if key in control_payload and control_payload.get(key) is not None:
+                new_target[key] = safe_bool(control_payload.get(key), False)
+
+        for key in metadata_float_keys:
+            if key in control_payload and control_payload.get(key) is not None:
+                new_target[key] = safe_float(control_payload.get(key), 0.0)
+
+        explicit_has_control = control_payload.get("has_control", None)
+        has_actuator_fields = any(key in control_payload for key in actuator_keys)
+
         if explicit_has_control is not None:
-            new_target["has_control"] = bool(explicit_has_control)
+            new_target["has_control"] = safe_bool(explicit_has_control, False)
         else:
-            new_target["has_control"] = bool(has_accel_key or has_speed_key)
+            # Only explicit final actuator fields imply that a CARLA control command
+            # is available. desired_acceleration is metadata and must not release hold.
+            new_target["has_control"] = bool(has_actuator_fields)
 
-        if has_accel_key and desired_acceleration_value is not None:
-            new_target["desired_acceleration"] = safe_float(desired_acceleration_value, 0.0)
-
-        if has_speed_key and desired_speed_value is not None:
-            new_target["desired_speed"] = safe_float(desired_speed_value, 0.0)
-
-        if "desired_acceleration" not in new_target:
-            new_target["desired_acceleration"] = 0.0
-        if "desired_speed" not in new_target:
-            new_target["desired_speed"] = 0.0
-        if "has_control" not in new_target:
-            new_target["has_control"] = False
+        defaults = {
+            "has_control": False,
+            "throttle": 0.0,
+            "brake": 0.0,
+            "steer": 0.0,
+            "hand_brake": False,
+            "reverse": False,
+            "manual_gear_shift": False,
+            "desired_speed": 0.0,
+            "desired_acceleration": 0.0,
+            "controller_acceleration": 0.0,
+        }
+        for key, value in defaults.items():
+            if key not in new_target:
+                new_target[key] = value
 
         changed = (new_target != previous)
 
@@ -2243,14 +2165,36 @@ class Bridge:
         if changed:
             self.control_update_pending_for_actor_ids.add(actor_id)
 
+            if safe_bool(new_target.get("has_control", False), False) and not self._target_has_actuator_fields(new_target):
+                log(
+                    "OMNET",
+                    "CONTROL_MISSING_ACTUATOR_FIELDS",
+                    "has_control=true but ctrl has no throttle/brake/steer fields; pyCARLANeT will not convert acceleration",
+                    actor=actor_id,
+                    simulation_time=float(self.simulation_time_seconds),
+                    source_module=source_module,
+                    sequence=sequence,
+                    hop=hop or "OMNET_TO_PY",
+                )
+
             log(
                 "OMNET",
                 "CONTROL_INTENT",
                 "",
                 actor=actor_id,
                 simulation_time=float(self.simulation_time_seconds),
+                throttle=float(new_target.get("throttle", 0.0)),
+                brake=float(new_target.get("brake", 0.0)),
+                steer=float(new_target.get("steer", 0.0)),
+                hand_brake=bool(new_target.get("hand_brake", False)),
+                reverse=bool(new_target.get("reverse", False)),
+                manual_gear_shift=bool(new_target.get("manual_gear_shift", False)),
+                has_control=bool(new_target.get("has_control", False)),
                 desired_speed=float(new_target.get("desired_speed", 0.0)),
                 desired_acceleration=float(new_target.get("desired_acceleration", 0.0)),
+                controller_acceleration=float(new_target.get("controller_acceleration", new_target.get("desired_acceleration", 0.0))),
+                desired_acceleration_used_by_python=False,
+                python_derived_control=False,
                 source_module=source_module,
                 sequence=sequence,
                 hop=hop or "OMNET_TO_PY",
@@ -2274,7 +2218,7 @@ class Bridge:
 
         if msg_type == "CONTROL":
             if "actor_id" not in user_defined:
-                return self.resp_generic({"ok": False, "error": "CONTROL requires user_defined.id"}, SIM_STATUS_ERROR, status=-1)
+                return self.resp_generic({"ok": False, "error": "CONTROL requires user_defined.actor_id"}, SIM_STATUS_ERROR, status=-1)
             if "ctrl" not in user_defined:
                 return self.resp_generic({"ok": False, "error": "CONTROL requires user_defined.ctrl"}, SIM_STATUS_ERROR, status=-1)
 
@@ -2282,7 +2226,7 @@ class Bridge:
             control_payload = user_defined.get("ctrl", None)
 
             if not actor_id:
-                return self.resp_generic({"ok": False, "error": "CONTROL requires non-empty user_defined.id"}, SIM_STATUS_ERROR, status=-1)
+                return self.resp_generic({"ok": False, "error": "CONTROL requires non-empty user_defined.actor_id"}, SIM_STATUS_ERROR, status=-1)
             if not isinstance(control_payload, dict):
                 return self.resp_generic({"ok": False, "error": "CONTROL user_defined.ctrl must be an object"}, SIM_STATUS_ERROR, status=-1)
 

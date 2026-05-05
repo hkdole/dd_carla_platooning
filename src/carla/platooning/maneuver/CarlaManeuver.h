@@ -6,8 +6,8 @@
 #include "carla/platooning/adapters/CarlaPositionHelper.h"
 #include "carla/platooning/adapters/CarlaControllerAdapter.h"
 
-#include "carla/platooning/messages/PlatooningBeacon_m.h"
-#include "carla/platooning/messages/ManeuverMessage_m.h"
+#include "plexe/messages/PlatooningBeacon_m.h"
+#include "plexe/messages/ManeuverMessage_m.h"
 
 namespace carla {
 
@@ -43,7 +43,7 @@ public:
     virtual void onManeuverMessage(const ManeuverMessage* mm) = 0;
 
     /**
-     * Handle failed unicast send if your app chooses to surface it.
+     * Handle failed unicast send if app chooses to surface it.
      */
     virtual void onFailedTransmissionAttempt(const ManeuverMessage* mm) = 0;
 

@@ -4,6 +4,8 @@ namespace carla {
 
 namespace {
 
+// Builds a safe no-control output.
+// HOLD should not produce a longitudinal acceleration command.
 ControlOutput buildHold(ControlMode mode, double speed = 0.0, bool hasControl = false)
 {
     ControlOutput out;
@@ -16,6 +18,8 @@ ControlOutput buildHold(ControlMode mode, double speed = 0.0, bool hasControl = 
 
 } // namespace
 
+// Chooses the correct longitudinal controller for the current semantic mode.
+// The maneuver/app layer owns mode transitions; this dispatcher only computes control output.
 ControlOutput ControllerDispatcher::compute(const ControllerInputs& in) const
 {
     switch (in.controlMode) {

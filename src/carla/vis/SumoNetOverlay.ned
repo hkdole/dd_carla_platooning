@@ -1,4 +1,4 @@
-// file: ~/omnet6_ws/plexe/src/org/car2x/plexe/vis/SumoNetOverlay.ned  (DROP-IN)
+// file: ~/workspace/plexe/src/org/car2x/plexe/vis/SumoNetOverlay.ned 
 package carla.vis;
 
 simple SumoNetOverlay

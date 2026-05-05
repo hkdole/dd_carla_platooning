@@ -6,6 +6,8 @@
 
 namespace carla {
 
+// Dispatches a ControllerInputs bundle to the controller selected by ControlMode.
+// ControlMode is semantic state: leader cruise, follower CACC, joiner approach, or hold.
 class ControllerDispatcher {
 public:
     ControlOutput compute(const ControllerInputs& in) const;

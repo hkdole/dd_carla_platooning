@@ -87,7 +87,6 @@ _FIELD_ORDER: Tuple[str, ...] = (
 
     "desired_speed",
     "desired_acceleration",
-    "acceleration_command",
     "throttle",
     "brake",
     "steering",
