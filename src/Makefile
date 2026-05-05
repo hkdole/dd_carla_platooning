@@ -44,8 +44,7 @@ OBJS = \
     $O/carla/platooning/controller/LeaderCruiseController.o \
     $O/carla/platooning/maneuver/CarlaJoinAtBack.o \
     $O/carla/platooning/maneuver/CarlaJoinManeuver.o \
-    $O/carla/platooning/maneuver/CarlaManeuver.o \
-    $O/carla/vis/SumoNetOverlay.o
+    $O/carla/platooning/maneuver/CarlaManeuver.o
 
 # Message files
 MSGFILES =
