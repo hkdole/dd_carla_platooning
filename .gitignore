@@ -40,7 +40,6 @@ out/
 *.elog
 
 # Logs
-logs/
 *.log
 omnetpp.log
 
