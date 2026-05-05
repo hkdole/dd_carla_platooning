@@ -2,7 +2,7 @@
 # OMNeT++/OMNEST Makefile for $(LIB_PREFIX)carla
 #
 # This file was generated with the command:
-#  opp_makemake --make-so -f --deep -o carla -O out -KCARLANETPP_PROJ=../../carlanetpp -KINET4_5_PROJ=/home/rancher/omnet6_ws/omnetpp-6.0.3/platooning/inet4.5 -KVEINS_PROJ=../../veins -KPLEXE_PROJ=../../plexe -DINET_IMPORT -DPLEXE_IMPORT -DVEINS_IMPORT -I. -I$$\(CARLANETPP_PROJ\)/src -I$$\(INET4_5_PROJ\)/src -I$$\(VEINS_PROJ\)/src -I. -I$$\(PLEXE_PROJ\)/src -L$$\(CARLANETPP_PROJ\)/src -L$$\(INET4_5_PROJ\)/src -L$$\(PLEXE_PROJ\)/src -L$$\(VEINS_PROJ\)/src -lzmq -lcarlanet$$\(D\) -lINET$$\(D\) -lplexe$$\(D\) -lveins$$\(D\)
+#  opp_makemake --make-so -f --deep -o carla -O out -KCARLANETPP_PROJ=../../carlanetpp -KINET4_5_PROJ=/home/ubuntu/workspace/omnetpp-6.0.3/v2v/inet4.5 -KVEINS_PROJ=../../veins -KPLEXE_PROJ=../../plexe -DINET_IMPORT -DPLEXE_IMPORT -DVEINS_IMPORT -I. -I$$\(CARLANETPP_PROJ\)/src -I$$\(INET4_5_PROJ\)/src -I$$\(VEINS_PROJ\)/src -I. -I$$\(PLEXE_PROJ\)/src -L$$\(CARLANETPP_PROJ\)/src -L$$\(INET4_5_PROJ\)/src -L$$\(PLEXE_PROJ\)/src -L$$\(VEINS_PROJ\)/src -lzmq -lcarlanet$$\(D\) -lINET$$\(D\) -lplexe$$\(D\) -lveins$$\(D\)
 #
 
 # Name of target to be created (-o option)
@@ -55,7 +55,7 @@ SMFILES =
 
 # Other makefile variables (-K)
 CARLANETPP_PROJ=../../carlanetpp
-INET4_5_PROJ=/home/rancher/omnet6_ws/omnetpp-6.0.3/platooning/inet4.5
+INET4_5_PROJ=/home/ubuntu/workspace/omnetpp-6.0.3/v2v/inet4.5
 VEINS_PROJ=../../veins
 PLEXE_PROJ=../../plexe
 

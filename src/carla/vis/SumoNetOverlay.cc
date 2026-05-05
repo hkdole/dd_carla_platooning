@@ -1,4 +1,4 @@
-// file: ~/omnet6_ws/plexe/src/org/car2x/plexe/vis/SumoNetOverlay.cc
+
 #include <omnetpp.h>
 #include <sstream>
 #include <vector>
