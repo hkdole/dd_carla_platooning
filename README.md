@@ -1,0 +1,2 @@
+# dd_carla_platooning
+Deliberately Decentralized Implementation of carla_platooning
