@@ -93,6 +93,15 @@ simple CarlaGeneralPlatooningApp extends org.car2x.veins.modules.application.iee
         // Plexe/SUMO CACC natural-frequency parameter, preserved for controller parity and analysis labels.
         double caccOmegaN @mutable = default(0.2);
 
+        // Parameters needed to run the distributed protocol
+        double alpha @mutable = default(0.6);
+        double deviation @mutable = default(0.4);
+        double range @mutable = default(400.0);
+        double desired_speed @mutable = default(10.0);
+
+        // EXTRA FOR TESTING PURPOSES ONLY
+        double brake_at @mutable @unit(s) = default(-1s); // Tells car to brake at a certain time
+
         // C++ implementation class for this NED module.
         @class(carla::CarlaGeneralPlatooningApp);
 

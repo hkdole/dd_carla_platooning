@@ -30,6 +30,8 @@ struct PlatoonNeighborState {
 
     simtime_t last = SIMTIME_ZERO;        // OMNeT++ sim time when this beacon state was received.
     bool valid = false;                   // True after at least one usable beacon has been received.
+
+    double desiredSpeed = 10.0;           // Defeault desired speed
 };
 
 } // namespace carla

@@ -84,6 +84,7 @@ GENERAL_APP_METHODS = {
     "ONMANEUVERMESSAGE",
     "HANDLEUPDATEPLATOONFORMATION",
     "HANDLEUPDATEPLATOONDATA",
+    "HANDLESELFMSG",
 }
 
 PLEXE_APP_METHODS = {
@@ -394,10 +395,21 @@ def extract_joiner_node_id(captured: Sequence[CapturedLine], actor: str) -> Opti
 def extract_leader_id(captured: Sequence[CapturedLine], actor: str) -> Optional[str]:
     actor_u = actor.upper()
 
+    for item in captured:
+        u = upper(item.text)
+        if f"ACTOR={actor_u}" not in u:
+            continue
+
+        # Distributed protocol — leader is whoever the heuristic selected
+        # Read from sendJoinRequest log line
+        m = re.search(r"\bDSTLEADER=(\d+)\b", u)
+        if m:
+            return m.group(1)
+
+    # Fallback to existing patterns for centralized protocol
     patterns = [
         r"\bLEADERID=(\d+)\b",
         r"\bLEADER_ID=(\d+)\b",
-        r"\bDSTLEADER=(\d+)\b",
         r"\bLOGICAL_DST=(\d+)\b",
     ]
 
@@ -405,7 +417,6 @@ def extract_leader_id(captured: Sequence[CapturedLine], actor: str) -> Optional[
         u = upper(item.text)
         if f"ACTOR={actor_u}" not in u:
             continue
-
         for pat in patterns:
             m = re.search(pat, u)
             if m:
@@ -497,6 +508,20 @@ def build_step_checks(captured: Sequence[CapturedLine], actor: str) -> List[Step
         )
     )
 
+    # 1.5) Candidate selected
+    steps.append(
+        evaluate_step(
+            captured,
+            "Heuristic evaluated and candidate selected",
+            [
+                StepRequirement(
+                    "candidate selected",
+                    pred_actor("[CARLAJOINATBACK][INITIALIZEJOINMANEUVER]"),
+                ),
+            ],
+        )
+    )
+
     # 2) Join request sent
     steps.append(
         evaluate_step(
@@ -507,7 +532,7 @@ def build_step_checks(captured: Sequence[CapturedLine], actor: str) -> List[Step
                     "start trigger",
                     pred_any_of(
                         pred_actor("[CARLAGENERALPLATOONINGAPP][STARTJOINMANEUVERIFCONFIGURED]"),
-                        pred_actor("[CARLAPLEXEAPP][STARTJOINMANEUVER]"),
+                        pred_actor("[CARLAJOINATBACK][INITIALIZEJOINMANEUVER]"),  # accept this as trigger evidence
                     ),
                 ),
                 StepRequirement(

@@ -29,7 +29,12 @@
 #include "plexe/messages/UpdatePlatoonFormation_m.h"
 
 namespace carla {
-
+// Id, cost needed for selecting a car to follow
+struct PlatoonCandidate {
+    bool valid = false;
+    int vehicleId = -1;
+    double cost = std::numeric_limits<double>::infinity();
+};
 /*
  * Main OMNeT++ application module for CARLA platooning nodes.
  *
@@ -222,6 +227,18 @@ protected:
     double caccXi_ = 1.0;      // damping ratio.
     double caccOmegaN_ = 0.2;  // natural frequency.
 
+    // Decentralized parameters
+    double alpha_ = 0.6;
+    double p_ = 0.4;
+    double r_ = 400.0;
+    int initialFrontId_ = -1;
+    int initialBackId_ = -1;
+    double platoonDesiredSpeed_ = 10.0;
+    omnetpp::cMessage* heuristicTimer_ = nullptr; // needed to collect entries for the neighbor table
+
+    // FOR TESTING PURPOSES ONLY
+    omnetpp::cMessage* brakeTimer_ = nullptr;
+
     // OMNeT++ timing parameters.
     simtime_t beaconInterval_ = SIMTIME_ZERO;    // interval between V2V beacons.
     simtime_t controlInterval_ = SIMTIME_ZERO;   // interval between controller updates.
@@ -317,6 +334,10 @@ protected:
     static omnetpp::simsignal_t controllerAccelerationExportSignal_;
     static omnetpp::simsignal_t distanceSignal_;
     static omnetpp::simsignal_t relativeSpeedSignal_;
+
+
+    // helper function
+    PlatoonCandidate evaluatePlatoonCandidates() const;
 };
 
 } // namespace carla

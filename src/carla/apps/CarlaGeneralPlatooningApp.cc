@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <limits>
 
 #include "veins/modules/messages/BaseFrame1609_4_m.h"
 #include "veins/modules/messages/DemoSafetyMessage_m.h"
@@ -88,8 +89,11 @@ CarlaGeneralPlatooningApp::CarlaGeneralPlatooningApp() = default;
 // cancelAndDelete() is required for scheduled self-messages to avoid use-after-free.
 CarlaGeneralPlatooningApp::~CarlaGeneralPlatooningApp()
 {
+    // FOR TESTING PURPOSES ONLY
+    if (brakeTimer_) cancelAndDelete(brakeTimer_);
     if (controlTimer_) cancelAndDelete(controlTimer_);
     if (startTimer_) cancelAndDelete(startTimer_);
+    if (heuristicTimer_) cancelAndDelete(heuristicTimer_);
     delete joinManeuver_;
 }
 
@@ -121,12 +125,8 @@ double CarlaGeneralPlatooningApp::getHeadway(ActiveController controller) const
 // In this CDS version, the target is constant and independent of ego speed.
 double CarlaGeneralPlatooningApp::getTargetDistance(double speed) const
 {
-    (void)speed;
-
-    // CDS bumper-gap target.
-    // computeGapToNeighbor() already returns center_distance - front_vehicle_length.
-    // Do not add vehicleLength_ here, or the follower will target too large a gap.
-    return gapMin_; // m; desired bumper-to-bumper gap.
+    // Constant time spacing
+    return gapMin_ + headway_ * std::max(0.0, speed);
 }
 
 // Controller-aware overload for code that follows Plexe naming conventions.
@@ -414,6 +414,16 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
 
     if (stage != 0) return;
 
+    // FOR BRAKE TEST ONLY
+    brakeTimer_ = new cMessage("brakeTimer");
+    if (hasPar("brake_at")) {
+        double brakeAt = par("brake_at").doubleValue();
+        if (brakeAt > 0) {
+            scheduleAt(SimTime(brakeAt), brakeTimer_);
+        }
+    }
+    // END
+
     // Signals consumed by BridgeApp or written to result vectors.
     if (desiredAccelerationSignal_ == SIMSIGNAL_NULL)
         desiredAccelerationSignal_ = registerSignal("desired_acceleration");
@@ -470,6 +480,11 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
     aMin_ = par("a_min").doubleValue();            // m/s^2; lower acceleration bound, usually negative.
     aMax_ = par("a_max").doubleValue();            // m/s^2; upper acceleration bound.
 
+    if (hasPar("alpha")) alpha_ = par("alpha").doubleValue();       // Alpha value for decentralized, beta = 1 - alpha
+    if (hasPar("deviation")) p_ = par("deviation").doubleValue();   // max speed deviation fraction
+    if (hasPar("range")) r_ = par("range").doubleValue();           // max position range in meters
+    if (hasPar("desired_speed")) platoonDesiredSpeed_ = par("desired_speed").doubleValue();
+
     if (hasPar("k_acc_ff")) kAccFF_ = par("k_acc_ff").doubleValue();                 // Feed-forward gain on front acceleration.
     if (hasPar("k_leader_dv")) kLeaderDv_ = par("k_leader_dv").doubleValue();         // Gain on leader-relative speed.
     if (hasPar("k_gap_speed")) kGapSpeed_ = par("k_gap_speed").doubleValue();         // Converts gap error to debug target-speed bias.
@@ -498,37 +513,52 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
     positionHelper_.setDistance(gapMin_);
     positionHelper_.setHeadway(headway_);
 
+    initialFrontId_ = -1;
+    initialBackId_ = -1;
     if (hasPar("initial_formation")) {
         const auto formation = parseFormation(par("initial_formation").stdstringValue());
+        // formation[0] = front neighbor (or self if no one ahead)
+        // formation[1] = self
+        // formation[2] = back neighbor (optional)
+        if (!formation.empty()) {
+            auto it = std::find(formation.begin(), formation.end(), nodeId_);
+            if (it != formation.end()) {
+                if (it != formation.begin())
+                    initialFrontId_ = *(it - 1);
+                if (std::next(it) != formation.end())
+                    initialBackId_ = *(std::next(it));
+        }
+    }
         if (!formation.empty()) positionHelper_.setPlatoonFormation(formation);
     }
 
-    const std::string roleStr = par("platoon_role").stdstringValue(); // "leader", "follower", "joiner", or none.
-    if (roleStr == "leader") {
+    // Distributed should be role agnostic and therefore everyone is a joiner. This is for the purpose of setting the state as opposed to role
+    const std::string roleStr = par("platoon_role").stdstringValue();
+    if (roleStr == "joiner") {
+        role_ = PlatoonRole::JOINER;
+    } else {
         role_ = PlatoonRole::LEADER;
+    }
+
+    // Set controller based on whether or not we have someone in front of us
+    if (initialFrontId_ >= 0) {
+        // Someone ahead — use CACC to follow them
+        positionHelper_.setController(ActiveController::CACC);
+        positionHelper_.setLeaderId(initialFrontId_);
+        controllerAdapter_.setActiveController(ActiveController::CACC);
+        controllerAdapter_.setControlMode(ControlMode::FOLLOWER_PLATOON);
+        controllerAdapter_.setCACCConstantSpacing(gapMin_);
+    } else {
+        // No one ahead — free cruise
         positionHelper_.setController(ActiveController::CC);
         controllerAdapter_.setActiveController(ActiveController::CC);
         controllerAdapter_.setControlMode(ControlMode::LEADER_CRUISE);
     }
-    else if (roleStr == "follower") {
-        role_ = PlatoonRole::FOLLOWER;
-        positionHelper_.setController(ActiveController::CACC);
-        controllerAdapter_.setActiveController(ActiveController::CACC);
-        controllerAdapter_.setCACCConstantSpacing(getTargetDistance(nominalPlatoonSpeed_));
-        controllerAdapter_.setControlMode(ControlMode::FOLLOWER_PLATOON);
-    }
-    else if (roleStr == "joiner") {
-        role_ = PlatoonRole::JOINER;
-        positionHelper_.setController(ActiveController::CC);
-        controllerAdapter_.setActiveController(ActiveController::CC);
-        controllerAdapter_.setControlMode(ControlMode::JOINER_FREE_CRUISE);
-    }
-    else {
-        role_ = PlatoonRole::NONE;
-        positionHelper_.setController(ActiveController::UNKNOWN);
-        controllerAdapter_.setActiveController(ActiveController::UNKNOWN);
-        controllerAdapter_.setControlMode(ControlMode::HOLD);
-    }
+
+    // Initialize timer for joiners to collect neighbor
+    heuristicTimer_ = new cMessage("heuristicTimer");
+
+    if (hasPar("desired_speed")) platoonDesiredSpeed_ = par("desired_speed").doubleValue();
 
     // Join-at-back maneuver state machine. See CarlaJoinAtBack.cc for message sequence handling.
     joinManeuver_ = new CarlaJoinAtBack(this);
@@ -536,6 +566,13 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
     // Self-messages are OMNeT++ timers. They are rescheduled in handleSelfMsg().
     controlTimer_ = new cMessage("platooningControlTimer");
     startTimer_ = new cMessage("joinStartTimer");
+
+    if (hasPar("start_maneuver_at")) {
+        const double startAt = par("start_maneuver_at").doubleValueInUnit("s");
+        if (startAt > 0) {
+            scheduleAt(SimTime(startAt), startTimer_);
+        }
+    }
 
     // Initialize export state from current mobility state.
     {
@@ -549,13 +586,6 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
     resetLongitudinalActuatorTracker();
 
     scheduleAt(simTime() + controlInterval_, controlTimer_);
-
-    if (role_ == PlatoonRole::JOINER && startManeuverAt_ >= SIMTIME_ZERO) {
-        simtime_t tStart = startManeuverAt_;
-        if (tStart <= simTime())
-            tStart = simTime() + controlInterval_;
-        scheduleAt(tStart, startTimer_);
-    }
 
     EV_INFO << "[CarlaGeneralPlatooningApp][initialize]"
             << " actor=" << actorId_
@@ -585,6 +615,11 @@ void CarlaGeneralPlatooningApp::handleSelfMsg(cMessage* msg)
 {
     if (activeManeuver_ && activeManeuver_->handleSelfMsg(msg)) return;
 
+    if (msg == startTimer_) {  // FOR TESTING PURPOSES. DELETE LATER
+        startJoinManeuverIfConfigured();
+        return;
+    }
+
     if (looksLikeBeaconSelfMsg(msg)) {
         sendPlatooningBeacon();
         scheduleAt(simTime() + beaconInterval_, msg);
@@ -602,15 +637,63 @@ void CarlaGeneralPlatooningApp::handleSelfMsg(cMessage* msg)
         return;
     }
 
+    if (msg == heuristicTimer_) { // Once we feel like we got all the neighbor beacons
+        if (role_ == PlatoonRole::JOINER &&
+            !inManeuver_ &&
+            controllerAdapter_.getControlMode() != ControlMode::FOLLOWER_PLATOON) {
+            auto candidate = evaluatePlatoonCandidates();
+            if (candidate.valid) {
+                JoinManeuverParameters params;
+                params.platoonId = candidate.vehicleId;
+                params.leaderId = candidate.vehicleId;
+                params.position = -1;
+
+                EV_INFO << "[CarlaGeneralPlatooningApp][heuristicEvaluation]"
+                    << " actor=" << actorId_
+                    << " candidateId=" << candidate.vehicleId
+                    << " cost=" << candidate.cost
+                    << "\n";
+
+                joinManeuver_->startManeuver(&params);
+            }
+        }
+        // Reschedule regardless — keep evaluating until joined
+        if (!inManeuver_ && 
+            controllerAdapter_.getControlMode() != ControlMode::FOLLOWER_PLATOON) {
+            scheduleAt(simTime() + 1.0, heuristicTimer_);
+        }
+        return;
+    }
+
+    // FOR BREAK TESTING ONLY
+    if (msg == brakeTimer_) {
+        leaderTargetSpeed_ = 0.0;
+        EV_INFO << "[CarlaGeneralPlatooningApp][brakeTest]"
+                << " actor=" << actorId_
+                << " action=full_stop"
+                << " at t=" << simTime()
+                << "\n";
+        return;
+    }
+    // END
+
     DemoBaseApplLayer::handleSelfMsg(msg);
 }
 
-// Starts the join-at-back maneuver for vehicles configured as joiners.
+// Starts the join-at-back maneuver for vehicles configured as leaders (because you shouldn't have a car in front of you when you join)
 // Called by startTimer_; actual message sequence is implemented in CarlaJoinAtBack.cc.
 void CarlaGeneralPlatooningApp::startJoinManeuverIfConfigured()
 {
     if (!joinManeuver_) return;
-    if (role_ != PlatoonRole::JOINER) return;
+    if (role_ == PlatoonRole::JOINER) {
+        // For joiners, trigger heuristic evaluation now
+        if (!inManeuver_ && heuristicTimer_ && !heuristicTimer_->isScheduled()) {
+            scheduleAt(simTime() + 1.0, heuristicTimer_);
+        }
+        return;
+    }
+
+    if (role_ != PlatoonRole::LEADER) return;
 
     JoinManeuverParameters params;
     params.platoonId = platoonId_;
@@ -734,6 +817,7 @@ void CarlaGeneralPlatooningApp::refreshNeighborFromBeacon(const PlatooningBeacon
     n.angle = pb->getAngle();
     n.last = simTime();
     n.valid = true;
+    n.desiredSpeed =  pb->getDesiredSpeed();
 
     EV_INFO << "[CarlaGeneralPlatooningApp][refreshNeighborFromBeacon]"
             << " actor=" << actorId_
@@ -892,10 +976,65 @@ void CarlaGeneralPlatooningApp::handleLowerMsg(cMessage* msg)
 }
 
 // Gives maneuver logic a chance to react to each received platooning beacon.
-// Useful for decentralized protocols that trigger decisions from local neighbor observations.
 void CarlaGeneralPlatooningApp::onPlatoonBeacon(const PlatooningBeacon* pb)
 {
     if (joinManeuver_) joinManeuver_->onPlatoonBeacon(pb);
+
+    if (role_ == PlatoonRole::JOINER && 
+        !inManeuver_ &&
+        heuristicTimer_ && 
+        !heuristicTimer_->isScheduled()) {
+        const bool waitingForStart = startTimer_ && startTimer_->isScheduled();
+        if (!waitingForStart) {
+            scheduleAt(simTime() + 1.0, heuristicTimer_);
+        }
+    }
+}
+
+// Iterate through neighbors to find optimal candidates
+PlatoonCandidate CarlaGeneralPlatooningApp::evaluatePlatoonCandidates() const {
+    const veins::Coord pos = getCurrentPosition();
+
+    veins::Coord vel(0, 0, 0);
+    if (mobility_) vel = toVeinsCoord(mobility_->getCurrentVelocity());
+    const double speed = scalarSpeedFromVelocity(vel);
+
+    PlatoonCandidate best;
+    for (const auto& [srcId, n] : neighborsByVehicleId_) {
+        if (!n.valid) continue;
+        if (srcId == nodeId_) continue;
+
+        const double dx = n.pos.x - pos.x;
+        const double dy = n.pos.y - pos.y;
+
+        // Skip candidates behind us
+        if (speed > 0.5) {
+            const double dotProduct = (dx * vel.x + dy * vel.y) / speed;
+            if (dotProduct < 0) continue;
+        }
+
+        const double ds = std::fabs(platoonDesiredSpeed_ - n.desiredSpeed);
+        const double dp = pos.distance(n.pos);
+
+        if (ds > p_ * platoonDesiredSpeed_) continue;
+        if (dp > r_) continue;
+
+        const double cost = alpha_ * ds + (1 - alpha_) * dp;
+
+        if (cost < best.cost) {
+            best.cost = cost;
+            best.vehicleId = srcId;
+            best.valid = true;
+        }
+    }
+
+    // Fallback to known front neighbor if heuristic finds nothing
+    if (!best.valid && initialFrontId_ >= 0) {
+        best.vehicleId = initialFrontId_;
+        best.valid = true;
+    }
+
+    return best;
 }
 
 // Handles maneuver messages and updates app-level state needed by controllers.
@@ -906,7 +1045,7 @@ void CarlaGeneralPlatooningApp::onManeuverMessage(const ManeuverMessage* mm)
     if (!mm) return;
 
     if (auto* mtp = dynamic_cast<const MoveToPosition*>(mm)) {
-        if (role_ == PlatoonRole::JOINER && mtp->getDestinationId() == nodeId_) {
+        if (mtp->getDestinationId() == nodeId_) { // Check if it's our own message or we already have our rear occupied
             const auto formation = extractFormation(mtp);
             const int frontId = findFrontVehicleIdInFormation(formation);
 
@@ -926,7 +1065,7 @@ void CarlaGeneralPlatooningApp::onManeuverMessage(const ManeuverMessage* mm)
         }
     }
     else if (auto* jf = dynamic_cast<const JoinFormation*>(mm)) {
-        if (role_ == PlatoonRole::JOINER && jf->getDestinationId() == nodeId_) {
+        if (jf->getDestinationId() == nodeId_) {
             const auto formation = extractFormation(jf);
             const int frontId = findFrontVehicleIdInFormation(formation);
 
@@ -962,8 +1101,7 @@ void CarlaGeneralPlatooningApp::onManeuverMessage(const ManeuverMessage* mm)
 // This is centralized membership synchronization in the baseline join-at-back protocol.
 void CarlaGeneralPlatooningApp::handleUpdatePlatoonFormation(const UpdatePlatoonFormation* msg)
 {
-    if (role_ != PlatoonRole::FOLLOWER) return;
-    if (msg->getPlatoonId() != positionHelper_.getPlatoonId()) return;
+    //if (msg->getPlatoonId() != positionHelper_.getPlatoonId()) return;
     if (msg->getVehicleId() != positionHelper_.getLeaderId()) return;
 
     const int oldPred = positionHelper_.getPredecessorId();
@@ -991,8 +1129,7 @@ void CarlaGeneralPlatooningApp::handleUpdatePlatoonFormation(const UpdatePlatoon
 // This extends formation updates with a possible platoon-id change.
 void CarlaGeneralPlatooningApp::handleUpdatePlatoonData(const UpdatePlatoonData* msg)
 {
-    if (role_ != PlatoonRole::FOLLOWER) return;
-    if (msg->getPlatoonId() != positionHelper_.getPlatoonId()) return;
+    //if (msg->getPlatoonId() != positionHelper_.getPlatoonId()) return;
     if (msg->getVehicleId() != positionHelper_.getLeaderId()) return;
 
     const int oldPlatoonId = positionHelper_.getPlatoonId();
@@ -1037,6 +1174,7 @@ void CarlaGeneralPlatooningApp::sendPlatooningBeacon()
     pb->setSpeedX(vel.x);                 // m/s; x velocity component.
     pb->setSpeedY(vel.y);                 // m/s; y velocity component.
     pb->setAngle(0.0);                    // rad; placeholder heading field.
+    pb->setDesiredSpeed(platoonDesiredSpeed_);   // As per the paper, we broadcast our desired speed
 
     auto* frame = new veins::BaseFrame1609_4("PlatooningBeaconFrame", 0);
     frame->setRecipientAddress(-1);       // broadcast.
@@ -1048,6 +1186,7 @@ void CarlaGeneralPlatooningApp::sendPlatooningBeacon()
             << " nodeId=" << positionHelper_.getId()
             << " seq=" << beaconSequence_
             << " speed=" << speed
+            << " desiredSpeed=" << platoonDesiredSpeed_
             << " actualAcceleration=" << actualAcceleration_
             << " controllerAcceleration=" << desiredAcceleration_
             << " pos=(" << pos.x << "," << pos.y << ")"
@@ -1069,6 +1208,8 @@ ControllerInputs CarlaGeneralPlatooningApp::buildControllerInputs() const
     // This avoids stale adapter state, especially for joiners that start as CC and later enter FAKED_CACC.
     switch (in.controlMode) {
         case ControlMode::LEADER_CRUISE:
+            in.activeController = ActiveController::CC;
+            break;
         case ControlMode::JOINER_FREE_CRUISE:
         case ControlMode::JOINER_WAIT_REPLY:
         case ControlMode::JOINER_WAIT_INFORMATION:
@@ -1225,129 +1366,51 @@ ControllerInputs CarlaGeneralPlatooningApp::buildControllerInputs() const
         }
     }
 
-    switch (in.controlMode) {
-        case ControlMode::LEADER_CRUISE:
-            in.targetSpeed = leaderTargetSpeed_;
-            in.targetGap = getTargetDistance(mySpeed);
-            break;
+    // Only apply unified gap control when not in an active maneuver phase
+    const bool inManeuverPhase = 
+        in.controlMode == ControlMode::JOINER_MOVE_IN_POSITION ||
+        in.controlMode == ControlMode::JOINER_WAIT_JOIN ||
+        in.controlMode == ControlMode::JOINER_WAIT_REPLY ||
+        in.controlMode == ControlMode::JOINER_WAIT_INFORMATION;
 
-        case ControlMode::JOINER_FREE_CRUISE:
-        case ControlMode::JOINER_WAIT_REPLY:
-        case ControlMode::JOINER_WAIT_INFORMATION:
-            in.targetSpeed = nominalPlatoonSpeed_;
-            in.targetGap = getTargetDistance(mySpeed);
-            break;
+    if (!inManeuverPhase) {
+        if (initialFrontId_ >= 0) {
+            PlatoonNeighborState front;
+            simtime_t frontAge = SIMTIME_ZERO;
+            const bool frontFresh = getNeighbor(initialFrontId_, front, frontAge) 
+                                    && (frontAge <= maxAge_);
 
-        case ControlMode::FOLLOWER_PLATOON: {
-            if (in.predecessor.valid) {
-                // CDS bumper-gap target. computeGapToNeighbor() already subtracts predecessor length.
-                in.targetGap = getTargetDistance(in.predecessor.speed);
+            if (frontFresh) {
+                in.predecessor.valid = true;
+                in.predecessor.speed = front.scalarSpeed;
+                in.predecessor.actualAcceleration = front.actualAcceleration;
+                in.predecessor.controllerAcceleration =
+                    std::isfinite(front.controllerAcceleration)
+                    ? front.controllerAcceleration
+                    : front.actualAcceleration;
+                in.predecessor.distance = computeGapToNeighbor(front);
+                in.targetGap = getTargetDistance(front.scalarSpeed);
 
-                const double eGap = in.predecessor.distance - in.targetGap; // m; positive means too far back.
-                const double closureBias = clampValue(
-                    computeSpeedBiasFromGapError(eGap, kGapSpeed_, maxClosureSpeed_),
+                const double gapError = in.predecessor.distance - in.targetGap;
+                const double speedBias = clampValue(
+                    gapError * kGapSpeed_,
                     -maxClosureSpeed_,
-                    maxClosureSpeed_
-                );
-
-                // Reference/debug speed only. pyCARLANeT should not use this as a hidden controller.
-                in.targetSpeed = std::max(0.0, in.predecessor.speed + closureBias);
+                    maxClosureSpeed_);
+                in.targetSpeed = std::max(0.0, front.scalarSpeed + speedBias);
+            } else {
+                // No fresh beacon yet — cruise at desired speed
+                in.targetSpeed = platoonDesiredSpeed_;
+                in.targetGap = getTargetDistance(in.egoSpeed);
             }
-            else if (in.leader.valid) {
-                in.targetGap = getTargetDistance(in.leader.speed);
-                in.targetSpeed = std::max(0.0, in.leader.speed);
-            }
-            else {
-                in.targetGap = getTargetDistance(mySpeed);
-                in.targetSpeed = mySpeed;
-            }
+            in.activeController = ActiveController::CACC;
 
-            EV_INFO << "[CarlaGeneralPlatooningApp][buildControllerInputs]"
-                    << " actor=" << actorId_
-                    << " mode=FOLLOWER_PLATOON"
-                    << " myId=" << myId
-                    << " predId=" << predId
-                    << " leaderId=" << leaderId
-                    << " predFresh=" << predFresh
-                    << " predAge=" << predAge
-                    << " leaderFresh=" << leaderFresh
-                    << " leaderAge=" << leaderAge
-                    << " predDistance=" << (in.predecessor.valid ? in.predecessor.distance : -1.0)
-                    << " predSpeed=" << (in.predecessor.valid ? in.predecessor.speed : -1.0)
-                    << " predCtrlAccel=" << (in.predecessor.valid ? in.predecessor.controllerAcceleration : 0.0)
-                    << " leaderSpeed=" << (in.leader.valid ? in.leader.speed : -1.0)
-                    << " leaderCtrlAccel=" << (in.leader.valid ? in.leader.controllerAcceleration : 0.0)
-                    << " targetGap=" << in.targetGap
-                    << " targetSpeed=" << in.targetSpeed
-                    << " egoSpeed=" << mySpeed
-                    << " caccXi=" << in.caccXi
-                    << " caccOmegaN=" << in.caccOmegaN
-                    << "\n";
-
-            break;
+        } else {
+            in.activeController = ActiveController::CC;
+            in.targetSpeed = leaderTargetSpeed_;
+            in.targetGap = getTargetDistance(in.egoSpeed);
         }
-
-        case ControlMode::JOINER_MOVE_IN_POSITION: {
-            const double spacing = controllerAdapter_.getCACCConstantSpacing(); // m; target gap for fake-front tracking.
-
-            if (in.fakeFront.valid) {
-                in.targetGap = (spacing > 0.0) ? spacing : getTargetDistance(in.fakeFront.speed);
-            }
-            else {
-                in.targetGap = (spacing > 0.0) ? spacing : getTargetDistance(mySpeed);
-            }
-
-            const double cruiseTarget = controllerAdapter_.getCruiseControlDesiredSpeed(); // m/s; optional maneuver override.
-            in.targetSpeed = (cruiseTarget > 0.0)
-                ? cruiseTarget
-                : (nominalPlatoonSpeed_ + approachDeltaV_);
-
-            EV_INFO << "[CarlaGeneralPlatooningApp][buildControllerInputs]"
-                    << " actor=" << actorId_
-                    << " mode=JOINER_MOVE_IN_POSITION"
-                    << " fakeFrontValid=" << in.fakeFront.valid
-                    << " fakeFrontDistance=" << (in.fakeFront.valid ? in.fakeFront.distance : -1.0)
-                    << " fakeFrontSpeed=" << (in.fakeFront.valid ? in.fakeFront.speed : -1.0)
-                    << " fakeLeaderValid=" << in.fakeLeader.valid
-                    << " fakeLeaderSpeed=" << (in.fakeLeader.valid ? in.fakeLeader.speed : -1.0)
-                    << " targetGap=" << in.targetGap
-                    << " targetSpeed=" << in.targetSpeed
-                    << " egoSpeed=" << mySpeed
-                    << "\n";
-
-            break;
-        }
-
-        case ControlMode::JOINER_WAIT_JOIN:
-            if (in.fakeFront.valid) {
-                in.targetGap = getTargetDistance(in.fakeFront.speed);
-                in.targetSpeed = in.fakeFront.speed;
-            }
-            else {
-                in.targetGap = getTargetDistance(mySpeed);
-                in.targetSpeed = nominalPlatoonSpeed_;
-            }
-
-            EV_INFO << "[CarlaGeneralPlatooningApp][buildControllerInputs]"
-                    << " actor=" << actorId_
-                    << " mode=JOINER_WAIT_JOIN"
-                    << " fakeFrontValid=" << in.fakeFront.valid
-                    << " fakeFrontDistance=" << (in.fakeFront.valid ? in.fakeFront.distance : -1.0)
-                    << " fakeFrontSpeed=" << (in.fakeFront.valid ? in.fakeFront.speed : -1.0)
-                    << " fakeLeaderValid=" << in.fakeLeader.valid
-                    << " fakeLeaderSpeed=" << (in.fakeLeader.valid ? in.fakeLeader.speed : -1.0)
-                    << " targetGap=" << in.targetGap
-                    << " targetSpeed=" << in.targetSpeed
-                    << " egoSpeed=" << mySpeed
-                    << "\n";
-
-            break;
-
-        case ControlMode::HOLD:
-        default:
-            in.targetSpeed = 0.0;
-            in.targetGap = getTargetDistance(mySpeed);
-            break;
+    } else {
+        in.targetSpeed = controllerAdapter_.getCruiseControlDesiredSpeed();
     }
 
     return in;

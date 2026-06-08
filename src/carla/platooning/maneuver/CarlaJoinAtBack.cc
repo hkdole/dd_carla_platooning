@@ -416,13 +416,6 @@ bool CarlaJoinAtBack::processJoinRequest(const JoinPlatoonRequest* msg)
 {
     if (!msg) return false;
 
-    if (msg->getPlatoonId() != positionHelper_->getPlatoonId()) return false;
-
-    if (app_->getPlatoonRole() != PlatoonRole::LEADER &&
-        app_->getPlatoonRole() != PlatoonRole::NONE) {
-        return false;
-    }
-
     const bool permission =
         ((app_->getPlatoonRole() == PlatoonRole::LEADER) ||
          (app_->getPlatoonRole() == PlatoonRole::NONE)) &&
@@ -451,10 +444,6 @@ bool CarlaJoinAtBack::processJoinRequest(const JoinPlatoonRequest* msg)
     // Clear stale local fake data on leader side as well.
     controllerAdapter_->clearLeaderVehicleFakeData();
     controllerAdapter_->clearFrontVehicleFakeData();
-
-    positionHelper_->setController(ActiveController::CC);
-    controllerAdapter_->setActiveController(ActiveController::CC);
-    controllerAdapter_->setControlMode(ControlMode::LEADER_CRUISE);
     controllerAdapter_->setFixedLane(app_->getCurrentLaneIndex());
     positionHelper_->setPlatoonLane(app_->getCurrentLaneIndex());
 
@@ -561,7 +550,6 @@ void CarlaJoinAtBack::handleMoveToPosition(const MoveToPosition* msg)
     if (joinManeuverState_ != JoinManeuverState::J_WAIT_INFORMATION) return;
     if (!targetPlatoonData_) return;
 
-    if (msg->getPlatoonId() != targetPlatoonData_->platoonId) return;
     if (msg->getVehicleId() != targetPlatoonData_->platoonLeader) return;
 
     targetPlatoonData_->from(msg);
@@ -679,7 +667,6 @@ void CarlaJoinAtBack::handleJoinFormation(const JoinFormation* msg)
     if (joinManeuverState_ != JoinManeuverState::J_WAIT_JOIN) return;
     if (!targetPlatoonData_) return;
 
-    if (msg->getPlatoonId() != targetPlatoonData_->platoonId) return;
     if (msg->getVehicleId() != targetPlatoonData_->platoonLeader) return;
     if (!formationMatches(msg, targetPlatoonData_->newFormation)) return;
 
@@ -718,9 +705,9 @@ void CarlaJoinAtBack::handleJoinFormation(const JoinFormation* msg)
         positionHelper_->getPlatoonLane(),
         formation);
 
-    app_->sendUnicast(ack, positionHelper_->getLeaderId());
+    app_->sendUnicast(ack, msg->getVehicleId()); // Don't send to leader because we are decentralized
 
-    app_->setPlatoonRole(PlatoonRole::FOLLOWER);
+    app_->setPlatoonRole(PlatoonRole::LEADER);
     controllerAdapter_->setControlMode(ControlMode::FOLLOWER_PLATOON);
 
     /*
@@ -765,22 +752,7 @@ void CarlaJoinAtBack::handleJoinFormationAck(const JoinFormationAck* msg)
 
     positionHelper_->setPlatoonFormation(joinerData_->newFormation);
 
-    // Notify each non-leader member of the updated formation.
-    // The updated formation changes each follower's predecessor selection.
-    for (int i = 1; i < positionHelper_->getPlatoonSize(); ++i) {
-        const int dest = positionHelper_->getMemberId(i);
-
-        UpdatePlatoonFormation* upd = app_->createUpdatePlatoonFormation(
-            positionHelper_->getId(),
-            positionHelper_->getExternalId(),
-            positionHelper_->getPlatoonId(),
-            dest,
-            positionHelper_->getPlatoonSpeed(),
-            positionHelper_->getPlatoonLane(),
-            joinerData_->newFormation);
-
-        app_->sendUnicast(upd, dest);
-    }
+    app_->setPlatoonRole(PlatoonRole::LEADER); // If two joiners joined each other, set the acceptor as a leader
 
     joinManeuverState_ = JoinManeuverState::IDLE;
     app_->setInManeuver(false, nullptr);

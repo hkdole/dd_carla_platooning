@@ -1,9 +1,8 @@
 package joinAtBack;
-
 import org.car2x.veins.base.connectionManager.ConnectionManager;
 import org.car2x.veins.base.modules.BaseWorldUtility;
+import org.car2x.veins.modules.world.annotations.AnnotationManager;
 import inet.common.scenario.ScenarioManager;
-
 import carlanet.CarlanetManager;
 import joinAtBack.CarlaPlatooningNode;
 
@@ -17,6 +16,9 @@ network CarlaPlatooningNetwork
         world: BaseWorldUtility {
             @display("p=70,60;i=block/globe");
         }
+        annotations: AnnotationManager {
+            @display("p=260,50");
+        }
         connectionManager: ConnectionManager {
             @display("p=250,60;i=block/network");
         }
@@ -29,7 +31,6 @@ network CarlaPlatooningNetwork
         actors[numActors]: CarlaPlatooningNode {
             @display("p=250,220,row,90");
         }
-
     connections allowunconnected:
         for i=0..numActors-1 {
             actors[i].toManager --> manager.controlIn++;

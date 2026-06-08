@@ -2,7 +2,7 @@
 # OMNeT++/OMNEST Makefile for $(LIB_PREFIX)carla
 #
 # This file was generated with the command:
-#  opp_makemake --make-so -f --deep -o carla -O out -KCARLANETPP_PROJ=../../carlanetpp -KINET4_5_PROJ=/home/ubuntu/workspace/omnetpp-6.0.3/v2v/inet4.5 -KVEINS_PROJ=../../veins -KPLEXE_PROJ=../../plexe -DINET_IMPORT -DPLEXE_IMPORT -DVEINS_IMPORT -I. -I$$\(CARLANETPP_PROJ\)/src -I$$\(INET4_5_PROJ\)/src -I$$\(VEINS_PROJ\)/src -I. -I$$\(PLEXE_PROJ\)/src -L$$\(CARLANETPP_PROJ\)/src -L$$\(INET4_5_PROJ\)/src -L$$\(PLEXE_PROJ\)/src -L$$\(VEINS_PROJ\)/src -lzmq -lcarlanet$$\(D\) -lINET$$\(D\) -lplexe$$\(D\) -lveins$$\(D\)
+#  opp_makemake --make-so -f --deep -o carla -O out -KCARLANETPP_PROJ=../../carlanetpp -KINET4_4_PROJ=/home/ubuntu/workspace/omnetpp-6.0.3/v2v/inet4.4 -KVEINS_PROJ=../../veins -KPLEXE_PROJ=../../plexe -DINET_IMPORT -DPLEXE_IMPORT -DVEINS_IMPORT -I. -I$$\(CARLANETPP_PROJ\)/src -I$$\(INET4_4_PROJ\)/src -I$$\(VEINS_PROJ\)/src -I. -I$$\(PLEXE_PROJ\)/src -L$$\(CARLANETPP_PROJ\)/src -L$$\(INET4_4_PROJ\)/src -L$$\(PLEXE_PROJ\)/src -L$$\(VEINS_PROJ\)/src -lzmq -lcarlanet$$\(D\) -lINET$$\(D\) -lplexe$$\(D\) -lveins$$\(D\)
 #
 
 # Name of target to be created (-o option)
@@ -17,7 +17,7 @@ TARGET_FILES = $(TARGET_DIR)/$(TARGET)
 INCLUDE_PATH = \
     -I. \
     -I$(CARLANETPP_PROJ)/src \
-    -I$(INET4_5_PROJ)/src \
+    -I$(INET4_4_PROJ)/src \
     -I$(VEINS_PROJ)/src \
     -I. \
     -I$(PLEXE_PROJ)/src
@@ -26,7 +26,7 @@ INCLUDE_PATH = \
 EXTRA_OBJS =
 
 # Additional libraries (-L, -l options)
-LIBS = $(LDFLAG_LIBPATH)$(CARLANETPP_PROJ)/src $(LDFLAG_LIBPATH)$(INET4_5_PROJ)/src $(LDFLAG_LIBPATH)$(PLEXE_PROJ)/src $(LDFLAG_LIBPATH)$(VEINS_PROJ)/src  -lzmq -lcarlanet$(D) -lINET$(D) -lplexe$(D) -lveins$(D)
+LIBS = $(LDFLAG_LIBPATH)$(CARLANETPP_PROJ)/src $(LDFLAG_LIBPATH)$(INET4_4_PROJ)/src $(LDFLAG_LIBPATH)$(PLEXE_PROJ)/src $(LDFLAG_LIBPATH)$(VEINS_PROJ)/src  -lzmq -lcarlanet$(D) -lINET$(D) -lplexe$(D) -lveins$(D)
 
 # Output directory
 PROJECT_OUTPUT_DIR = ../out
@@ -54,7 +54,7 @@ SMFILES =
 
 # Other makefile variables (-K)
 CARLANETPP_PROJ=../../carlanetpp
-INET4_5_PROJ=/home/ubuntu/workspace/omnetpp-6.0.3/v2v/inet4.5
+INET4_4_PROJ=/home/ubuntu/workspace/omnetpp-6.0.3/v2v/inet4.4
 VEINS_PROJ=../../veins
 PLEXE_PROJ=../../plexe
 
@@ -77,7 +77,7 @@ include $(CONFIGFILE)
 # Simulation kernel and user interface libraries
 OMNETPP_LIBS = -loppenvir$D $(KERNEL_LIBS) $(SYS_LIBS)
 ifneq ($(PLATFORM),win32)
-LIBS += -Wl,-rpath,$(abspath $(CARLANETPP_PROJ)/src) -Wl,-rpath,$(abspath $(INET4_5_PROJ)/src) -Wl,-rpath,$(abspath $(PLEXE_PROJ)/src) -Wl,-rpath,$(abspath $(VEINS_PROJ)/src)
+LIBS += -Wl,-rpath,$(abspath $(CARLANETPP_PROJ)/src) -Wl,-rpath,$(abspath $(INET4_4_PROJ)/src) -Wl,-rpath,$(abspath $(PLEXE_PROJ)/src) -Wl,-rpath,$(abspath $(VEINS_PROJ)/src)
 endif
 
 COPTS = $(CFLAGS) $(IMPORT_DEFINES) -DINET_IMPORT -DPLEXE_IMPORT -DVEINS_IMPORT $(INCLUDE_PATH) -I$(OMNETPP_INCL_DIR)
