@@ -39,15 +39,23 @@ OBJS = \
     $O/carla/apps/CarlaGeneralPlatooningApp.o \
     $O/carla/phy/CarlaPhyLayer80211p.o \
     $O/carla/platooning/controller/ControllerDispatcher.o \
+    $O/carla/platooning/controller/FollowerAccController.o \
     $O/carla/platooning/controller/FollowerCaccController.o \
     $O/carla/platooning/controller/JoinerFakedCaccController.o \
     $O/carla/platooning/controller/LeaderCruiseController.o \
     $O/carla/platooning/maneuver/CarlaJoinAtBack.o \
     $O/carla/platooning/maneuver/CarlaJoinManeuver.o \
+    $O/carla/platooning/messages/ExitRequest_m.o \
+    $O/carla/platooning/messages/ExitAck_m.o \
+    $O/carla/platooning/maneuver/CarlaExitManeuver.o \
+    $O/carla/platooning/controller/LateralController.o \
+    $O/carla/platooning/maneuver/CarlaLaneChangeManeuver.o \
     $O/carla/platooning/maneuver/CarlaManeuver.o
 
 # Message files
-MSGFILES =
+MSGFILES = \
+    carla/platooning/messages/ExitRequest.msg \
+    carla/platooning/messages/ExitAck.msg
 
 # SM files
 SMFILES =

@@ -27,6 +27,8 @@ ControlOutput ControllerDispatcher::compute(const ControllerInputs& in) const
             return leaderCruiseController_.compute(in, ControlMode::LEADER_CRUISE);
 
         case ControlMode::FOLLOWER_PLATOON:
+            if (in.activeController == ActiveController::ACC)
+                return followerAccController_.compute(in);
             return followerCaccController_.compute(in);
 
         case ControlMode::JOINER_FREE_CRUISE:

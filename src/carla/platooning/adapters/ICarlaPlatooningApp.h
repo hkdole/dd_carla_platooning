@@ -101,6 +101,13 @@ public:
     // The lower 802.11p frame may be broadcast; receivers filter by destinationId.
     virtual void sendUnicast(omnetpp::cPacket* msg, int destination) = 0;
 
+    // Allow the ability to change leader and platoon desired speed
+    virtual double getPlatoonDesiredSpeed() const = 0;
+    virtual void setLeaderTargetSpeed(double speed) = 0;
+
+    // Remove front vehicle for CACC
+    virtual void clearFrontVehicle() = 0;
+
     // Fills fields shared by all maneuver messages.
     // Specific message factory functions add message-specific fields after this.
     virtual void fillManeuverMessage(

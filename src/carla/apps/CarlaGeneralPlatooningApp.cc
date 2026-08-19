@@ -94,6 +94,7 @@ CarlaGeneralPlatooningApp::~CarlaGeneralPlatooningApp()
     if (controlTimer_) cancelAndDelete(controlTimer_);
     if (startTimer_) cancelAndDelete(startTimer_);
     if (heuristicTimer_) cancelAndDelete(heuristicTimer_);
+    if (exitTimer_) cancelAndDelete(exitTimer_);
     delete joinManeuver_;
 }
 
@@ -414,7 +415,11 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
 
     if (stage != 0) return;
 
-    // FOR BRAKE TEST ONLY
+    // Select controller type
+    if (hasPar("controller_type")) 
+        controllerType_ = par("controller_type").stdstringValue();
+
+    // Apply brake timer if configured
     brakeTimer_ = new cMessage("brakeTimer");
     if (hasPar("brake_at")) {
         double brakeAt = par("brake_at").doubleValue();
@@ -422,13 +427,33 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
             scheduleAt(SimTime(brakeAt), brakeTimer_);
         }
     }
-    // END
+
+    // Apply exit if enabled
+    exitManeuver_ = new CarlaExitManeuver(this);
+    exitEnabled_ = hasPar("exit_enabled") && par("exit_enabled").boolValue();
+    if (exitEnabled_ && hasPar("exit_at")) {
+        const double exitAt = par("exit_at").doubleValueInUnit("s");
+        if (exitAt > 0) {
+            exitTimer_ = new cMessage("exitTimer");
+            scheduleAt(SimTime(exitAt), exitTimer_);
+        }
+    }
+
+    // Apply sinusoidal movement if configured
+    if (hasPar("sinusoidal_speed"))
+        sinusoidalSpeed_ = par("sinusoidal_speed").boolValue();
+    if (hasPar("sinusoidal_amplitude")) 
+        sinusoidalAmplitude_ = par("sinusoidal_amplitude").doubleValueInUnit("mps");
+    if (hasPar("sinusoidal_period")) 
+        sinusoidalPeriod_ = par("sinusoidal_period").doubleValueInUnit("s");
+    if (hasPar("sinusoidal_start_at")) 
+        sinusoidalStartAt_ = par("sinusoidal_start_at").doubleValueInUnit("s");
 
     // Signals consumed by BridgeApp or written to result vectors.
     if (desiredAccelerationSignal_ == SIMSIGNAL_NULL)
         desiredAccelerationSignal_ = registerSignal("desired_acceleration");
     if (desiredSpeedSignal_ == SIMSIGNAL_NULL)
-        desiredSpeedSignal_ = registerSignal("desired_speed");
+        desiredSpeedSignal_ = registerSignal("output_desired_speed");
     if (controlModeSignal_ == SIMSIGNAL_NULL)
         controlModeSignal_ = registerSignal("control_mode");
     if (hasControlSignal_ == SIMSIGNAL_NULL)
@@ -460,6 +485,12 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
     if (relativeSpeedSignal_ == SIMSIGNAL_NULL)
         relativeSpeedSignal_ = registerSignal("relativeSpeed");
 
+    // Steering Signal registration
+    if (controlSteerSignal_ == SIMSIGNAL_NULL)
+        controlSteerSignal_ = registerSignal("control_steer");
+    if (lateralControlActiveSignal_ == SIMSIGNAL_NULL)
+        lateralControlActiveSignal_ = registerSignal("lateral_control_active");
+
     // Mobility module updated by CarlanetManager from pyCARLANeT position snapshots.
     mobility_ = check_and_cast<CarlaInetMobility*>(getParentModule()->getSubmodule("mobility"));
 
@@ -470,6 +501,7 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
 
     nominalPlatoonSpeed_ = par("nominal_platoon_speed").doubleValue(); // m/s; steady platoon cruise speed.
     leaderTargetSpeed_ = par("leader_target_speed").doubleValue();     // m/s; leader CC speed target.
+
     vehicleLength_ = par("vehicle_length").doubleValue();              // m; used to convert center distance to bumper gap.
 
     headway_ = par("headway").doubleValue();       // s; time-gap parameter for CTS-style controllers.
@@ -480,10 +512,14 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
     aMin_ = par("a_min").doubleValue();            // m/s^2; lower acceleration bound, usually negative.
     aMax_ = par("a_max").doubleValue();            // m/s^2; upper acceleration bound.
 
+    multilaneJoinEnabled_ = par("multilane_join_enabled").boolValue();
+    laneChangePenalty_ = par("lane_change_penalty").doubleValue();
+    laneWidthM_ = par("lane_width_m").doubleValueInUnit("m");
+
     if (hasPar("alpha")) alpha_ = par("alpha").doubleValue();       // Alpha value for decentralized, beta = 1 - alpha
     if (hasPar("deviation")) p_ = par("deviation").doubleValue();   // max speed deviation fraction
     if (hasPar("range")) r_ = par("range").doubleValue();           // max position range in meters
-    if (hasPar("desired_speed")) platoonDesiredSpeed_ = par("desired_speed").doubleValue();
+    platoonDesiredSpeed_ = par("desired_speed").doubleValue();
 
     if (hasPar("k_acc_ff")) kAccFF_ = par("k_acc_ff").doubleValue();                 // Feed-forward gain on front acceleration.
     if (hasPar("k_leader_dv")) kLeaderDv_ = par("k_leader_dv").doubleValue();         // Gain on leader-relative speed.
@@ -502,6 +538,10 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
     if (hasPar("join_position")) joinPosition_ = par("join_position").intValue(); // index/id semantics used by join maneuver.
     if (hasPar("approach_delta_v")) approachDeltaV_ = par("approach_delta_v").doubleValue(); // m/s; joiner speed offset while approaching.
     if (hasPar("in_pos_slack")) inPosSlack_ = par("in_pos_slack").doubleValue();   // m; tolerance for declaring joiner in position.
+
+    // Steering control
+    if (hasPar("lateral_control_enabled"))
+        lateralControlEnabled_ = par("lateral_control_enabled").boolValue();
 
     // PositionHelper stores Plexe-like platoon metadata: id, leader, formation, lane, speed, spacing.
     positionHelper_.setId(nodeId_);
@@ -557,6 +597,10 @@ void CarlaGeneralPlatooningApp::initialize(int stage)
 
     // Initialize timer for joiners to collect neighbor
     heuristicTimer_ = new cMessage("heuristicTimer");
+
+    // Delete later
+    if (hasPar("desired_speed")) platoonDesiredSpeed_ = par("desired_speed").doubleValue();
+    EV_INFO << "[DEBUG] actor=" << actorId_ << " platoonDesiredSpeed_=" << platoonDesiredSpeed_ << "\n";   
 
     if (hasPar("desired_speed")) platoonDesiredSpeed_ = par("desired_speed").doubleValue();
 
@@ -615,7 +659,7 @@ void CarlaGeneralPlatooningApp::handleSelfMsg(cMessage* msg)
 {
     if (activeManeuver_ && activeManeuver_->handleSelfMsg(msg)) return;
 
-    if (msg == startTimer_) {  // FOR TESTING PURPOSES. DELETE LATER
+    if (msg == startTimer_) {
         startJoinManeuverIfConfigured();
         return;
     }
@@ -632,29 +676,48 @@ void CarlaGeneralPlatooningApp::handleSelfMsg(cMessage* msg)
         return;
     }
 
-    if (msg == startTimer_) {
-        startJoinManeuverIfConfigured();
-        return;
-    }
-
     if (msg == heuristicTimer_) { // Once we feel like we got all the neighbor beacons
         if (role_ == PlatoonRole::JOINER &&
             !inManeuver_ &&
             controllerAdapter_.getControlMode() != ControlMode::FOLLOWER_PLATOON) {
             auto candidate = evaluatePlatoonCandidates();
+            const int egoLaneId = mobility_ ? mobility_->getCarlaLaneId() : 0;
             if (candidate.valid) {
-                JoinManeuverParameters params;
-                params.platoonId = candidate.vehicleId;
-                params.leaderId = candidate.vehicleId;
-                params.position = -1;
+                if (candidate.laneDistance > 0) {
+                    // Cross-lane candidate: change lanes first, then join.
+                    // laneChangeManeuver_ will hand off to CarlaJoinAtBack via
+                    // LANE_CHANGE_COMPLETE once the vehicle reaches the target lane.
+                    const JoinSlot slot{candidate.vehicleId, -1};
+                    laneChangeManeuver_.start(
+                        egoLaneId,             // mobility_->getCarlaLaneId() - compute before this block
+                        candidate.laneId,
+                        laneWidthM_,           // from NED param, read in initialize()
+                        slot);
+                    setInManeuver(true, nullptr);
 
-                EV_INFO << "[CarlaGeneralPlatooningApp][heuristicEvaluation]"
-                    << " actor=" << actorId_
-                    << " candidateId=" << candidate.vehicleId
-                    << " cost=" << candidate.cost
-                    << "\n";
+                    EV_INFO << "[CarlaGeneralPlatooningApp][heuristicEvaluation]"
+                        << " actor=" << actorId_
+                        << " candidateId=" << candidate.vehicleId
+                        << " cost=" << candidate.cost
+                        << " laneDistance=" << candidate.laneDistance
+                        << " action=lane_change_first"
+                        << "\n";
+                } else {
+                    // Same-lane candidate: existing path, completely unchanged.
+                    JoinManeuverParameters params;
+                    params.platoonId = candidate.vehicleId;
+                    params.leaderId = candidate.vehicleId;
+                    params.position = -1;
 
-                joinManeuver_->startManeuver(&params);
+                    EV_INFO << "[CarlaGeneralPlatooningApp][heuristicEvaluation]"
+                        << " actor=" << actorId_
+                        << " candidateId=" << candidate.vehicleId
+                        << " cost=" << candidate.cost
+                        << " action=join_direct"
+                        << "\n";
+
+                    joinManeuver_->startManeuver(&params);
+                }
             }
         }
         // Reschedule regardless — keep evaluating until joined
@@ -665,7 +728,7 @@ void CarlaGeneralPlatooningApp::handleSelfMsg(cMessage* msg)
         return;
     }
 
-    // FOR BREAK TESTING ONLY
+    // For testing timers
     if (msg == brakeTimer_) {
         leaderTargetSpeed_ = 0.0;
         EV_INFO << "[CarlaGeneralPlatooningApp][brakeTest]"
@@ -675,7 +738,13 @@ void CarlaGeneralPlatooningApp::handleSelfMsg(cMessage* msg)
                 << "\n";
         return;
     }
-    // END
+
+    if (msg == exitTimer_) {
+        setInManeuver(true, exitManeuver_);
+        exitManeuver_->startManeuver(nullptr);
+        return;
+    }
+    // end
 
     DemoBaseApplLayer::handleSelfMsg(msg);
 }
@@ -818,6 +887,7 @@ void CarlaGeneralPlatooningApp::refreshNeighborFromBeacon(const PlatooningBeacon
     n.last = simTime();
     n.valid = true;
     n.desiredSpeed =  pb->getDesiredSpeed();
+    n.laneId = pb->getLaneId();
 
     EV_INFO << "[CarlaGeneralPlatooningApp][refreshNeighborFromBeacon]"
             << " actor=" << actorId_
@@ -999,6 +1069,8 @@ PlatoonCandidate CarlaGeneralPlatooningApp::evaluatePlatoonCandidates() const {
     if (mobility_) vel = toVeinsCoord(mobility_->getCurrentVelocity());
     const double speed = scalarSpeedFromVelocity(vel);
 
+    const int egoLaneId = mobility_ ? mobility_->getCarlaLaneId() : 0;
+
     PlatoonCandidate best;
     for (const auto& [srcId, n] : neighborsByVehicleId_) {
         if (!n.valid) continue;
@@ -1013,17 +1085,37 @@ PlatoonCandidate CarlaGeneralPlatooningApp::evaluatePlatoonCandidates() const {
             if (dotProduct < 0) continue;
         }
 
+        // Exclude opposite-direction lanes by sign convention.
+        if (egoLaneId != 0 && n.laneId != 0) {
+            const bool sameDirection =
+                (egoLaneId > 0) == (n.laneId > 0);
+            if (!sameDirection) continue;
+        }
+
         const double ds = std::fabs(platoonDesiredSpeed_ - n.desiredSpeed);
         const double dp = pos.distance(n.pos);
 
         if (ds > p_ * platoonDesiredSpeed_) continue;
         if (dp > r_) continue;
 
-        const double cost = alpha_ * ds + (1 - alpha_) * dp;
+        const int laneDelta = std::abs(n.laneId - egoLaneId);
+        const bool sameLane = (laneDelta == 0);
+
+        double cost = alpha_ * ds + (1.0 - alpha_) * dp;
+
+        // Scale penalty by lane distance so a 2-lane jump always costs
+        // more than a 1-lane jump, and a same-lane candidate never loses
+        // on cost alone to any cross-lane candidate.
+        if (!sameLane) {
+            if (!multilaneJoinEnabled_) continue;
+            cost += laneChangePenalty_ * static_cast<double>(laneDelta);
+        }
 
         if (cost < best.cost) {
             best.cost = cost;
             best.vehicleId = srcId;
+            best.laneId = n.laneId;
+            best.laneDistance = laneDelta;
             best.valid = true;
         }
     }
@@ -1031,6 +1123,7 @@ PlatoonCandidate CarlaGeneralPlatooningApp::evaluatePlatoonCandidates() const {
     // Fallback to known front neighbor if heuristic finds nothing
     if (!best.valid && initialFrontId_ >= 0) {
         best.vehicleId = initialFrontId_;
+        best.laneDistance = 0; // assume same lane for configured front
         best.valid = true;
     }
 
@@ -1083,6 +1176,13 @@ void CarlaGeneralPlatooningApp::onManeuverMessage(const ManeuverMessage* mm)
                     << " formationSize=" << formation.size()
                     << "\n";
         }
+    }
+
+    const std::string className = mm->getClassName();
+    if (className.find("ExitRequest") != std::string::npos ||
+        className.find("ExitAck") != std::string::npos) {
+        exitManeuver_->onManeuverMessage(mm);
+        return;
     }
 
     if (activeManeuver_) activeManeuver_->onManeuverMessage(mm);
@@ -1175,6 +1275,7 @@ void CarlaGeneralPlatooningApp::sendPlatooningBeacon()
     pb->setSpeedY(vel.y);                 // m/s; y velocity component.
     pb->setAngle(0.0);                    // rad; placeholder heading field.
     pb->setDesiredSpeed(platoonDesiredSpeed_);   // As per the paper, we broadcast our desired speed
+    pb->setLaneId(mobility_ ? mobility_->getCarlaLaneId() : 0); // Lane ID
 
     auto* frame = new veins::BaseFrame1609_4("PlatooningBeaconFrame", 0);
     frame->setRecipientAddress(-1);       // broadcast.
@@ -1187,6 +1288,7 @@ void CarlaGeneralPlatooningApp::sendPlatooningBeacon()
             << " seq=" << beaconSequence_
             << " speed=" << speed
             << " desiredSpeed=" << platoonDesiredSpeed_
+            << " laneId=" << (mobility_ ? mobility_->getCarlaLaneId() : 0)
             << " actualAcceleration=" << actualAcceleration_
             << " controllerAcceleration=" << desiredAcceleration_
             << " pos=(" << pos.x << "," << pos.y << ")"
@@ -1217,7 +1319,9 @@ ControllerInputs CarlaGeneralPlatooningApp::buildControllerInputs() const
             break;
 
         case ControlMode::FOLLOWER_PLATOON:
-            in.activeController = ActiveController::CACC;
+            in.activeController = (controllerType_ == "ACC")
+                ? ActiveController::ACC
+                : ActiveController::CACC;
             break;
 
         case ControlMode::JOINER_MOVE_IN_POSITION:
@@ -1398,11 +1502,18 @@ ControllerInputs CarlaGeneralPlatooningApp::buildControllerInputs() const
                     maxClosureSpeed_);
                 in.targetSpeed = std::max(0.0, front.scalarSpeed + speedBias);
             } else {
-                // No fresh beacon yet — cruise at desired speed
                 in.targetSpeed = platoonDesiredSpeed_;
                 in.targetGap = getTargetDistance(in.egoSpeed);
             }
-            in.activeController = ActiveController::CACC;
+
+            // Select controller based on type
+            if (controllerType_ == "ACC") {
+                in.activeController = ActiveController::ACC;
+            } else if (controllerType_ == "CC") {
+                in.activeController = ActiveController::CC;
+            } else {
+                in.activeController = ActiveController::CACC;  // default
+            }
 
         } else {
             in.activeController = ActiveController::CC;
@@ -1498,6 +1609,14 @@ void CarlaGeneralPlatooningApp::onControlTick()
 
     actualAcceleration_ = measuredAcceleration;
 
+    // For sinusoidal speed if configured
+    if (sinusoidalSpeed_ && simTime().dbl() >= sinusoidalStartAt_) {
+        const double t = simTime().dbl() - sinusoidalStartAt_;
+        leaderTargetSpeed_ = nominalPlatoonSpeed_ + 
+            sinusoidalAmplitude_ * std::sin(2.0 * M_PI * t / sinusoidalPeriod_);
+        leaderTargetSpeed_ = std::max(0.0, leaderTargetSpeed_);
+    }
+
     // Compute Plexe-style controller acceleration.
     ControlOutput out = computeControllerOutput();
 
@@ -1536,6 +1655,65 @@ void CarlaGeneralPlatooningApp::onControlTick()
 
             // Match control-law sign convention: predecessor speed minus ego speed.
             exportedRelativeSpeed = pred.scalarSpeed - currentSpeed;
+        }
+    }
+
+    // Lateral control
+    if (lateralControlEnabled_ && mobility_) {
+        const ObservedVehicleState obsState = buildObservedVehicleState();
+        if (!obsState.routePolyline.empty()) {
+            lateralController_.initialize(
+                obsState.routePolyline,
+                obsState.wheelbaseM,
+                obsState.maximumFrontWheelSteeringRad);
+
+            double referenceOffsetM = 0.0;
+            if (laneChangeManeuver_.isActive()) {
+                const int hopLaneId = laneChangeManeuver_.currentHopTargetLaneId();
+                const double liveOffset = mobility_->getLateralOffsetToLaneId(hopLaneId);
+                laneChangeManeuver_.tick(obsState, liveOffset);
+                // Use live offset scaled to prevent aggressive steering
+                const double scaledOffset = liveOffset * 0.85; // 85% seems to be the sweetspot
+                referenceOffsetM = scaledOffset;
+
+                // Pass live offset to tick() only for settling/completion detection
+                laneChangeManeuver_.tick(obsState, liveOffset);
+
+                if (laneChangeManeuver_.state() ==
+                    LaneChangeState::LANE_CHANGE_COMPLETE) {
+                    referenceOffsetM = laneChangeManeuver_.completedOffsetM();
+                    setInManeuver(false, nullptr);
+                    const JoinSlot slot = laneChangeManeuver_.targetSlot();
+                    JoinManeuverParameters params;
+                    params.platoonId = slot.predecessorActorId;
+                    params.leaderId = slot.predecessorActorId;
+                    params.position = -1;
+                    joinManeuver_->startManeuver(&params);
+                    laneChangeManeuver_.reset();
+                } else if (laneChangeManeuver_.state() ==
+                        LaneChangeState::ABORTED) {
+                    setInManeuver(false, nullptr);
+                    laneChangeManeuver_.reset();
+                }
+            }
+
+            if (laneChangeManeuver_.isActive()) {
+                lateralController_.setLookaheadM(15.0);
+            } else {
+                lateralController_.setLookaheadM(6.0);
+            }
+
+            const LateralSteeringResult result =
+                lateralController_.computeSteering(obsState, referenceOffsetM);
+            if (result.status == LateralSteeringStatus::Valid) {
+                lastSteerRad_ = result.steeringRad;
+                lastValidSteeringAvailable_ = true;
+            }
+            const double maxSteer = obsState.maximumFrontWheelSteeringRad > 0.0
+                ? obsState.maximumFrontWheelSteeringRad : 0.7;
+            lastNormalizedSteer_ = std::max(-1.0, std::min(1.0,
+                lastSteerRad_ / maxSteer));
+            lateralControlActive_ = true;
         }
     }
 
@@ -1588,6 +1766,10 @@ void CarlaGeneralPlatooningApp::onControlTick()
     emit(controllerAccelerationExportSignal_, desiredAcceleration_);
     emit(distanceSignal_, exportedDistance);
     emit(relativeSpeedSignal_, exportedRelativeSpeed);
+
+    // Steering controller
+    emit(controlSteerSignal_, lastNormalizedSteer_);
+    emit(lateralControlActiveSignal_, lateralControlActive_ ? 1.0 : 0.0);
 }
 
 // Updates the semantic control mode and keeps adapter/helper controller labels consistent.
@@ -1671,6 +1853,47 @@ void CarlaGeneralPlatooningApp::maneuverCompleteJoinAsFollower(
     joinFrontVehicleId_ = -1;
     platoonId_ = platoonId;
     leaderId_ = leaderId;
+}
+
+ObservedVehicleState CarlaGeneralPlatooningApp::buildObservedVehicleState() const
+{
+    ObservedVehicleState state;
+    if (!mobility_) return state;
+
+    const auto pos = toVeinsCoord(mobility_->getCurrentPosition());
+    const auto vel = toVeinsCoord(mobility_->getCurrentVelocity());
+    const auto acc = toVeinsCoord(mobility_->getCurrentAcceleration());
+
+    state.positionM     = pos;
+    state.velocityMps   = vel;
+    state.accelerationMps2 = acc;
+    state.speedMps      = scalarSpeedFromVelocity(vel);
+    state.yawRad        = mobility_->getYawRad();
+    state.wheelbaseM    = mobility_->getWheelbaseM();
+    state.maximumFrontWheelSteeringRad = mobility_->getMaxSteerRad();
+
+    // Build route polyline from raw vectors
+    const auto& rx    = mobility_->getRouteX();
+    const auto& ry    = mobility_->getRouteY();
+    const auto& ryaw  = mobility_->getRouteYaw();
+    const auto& rroad = mobility_->getRouteRoadId();
+    const auto& rlane = mobility_->getRouteLaneId();
+
+    state.routePolyline.clear();
+    for (size_t i = 0; i < rx.size(); ++i) {
+        LateralRoutePoint pt;
+        pt.xM        = rx[i];
+        pt.yM        = ry[i];
+        pt.yawRad    = ryaw[i];
+        pt.roadId    = rroad[i];
+        pt.laneId    = rlane[i];
+        pt.routeIndex = (int)i;
+        state.routePolyline.push_back(pt);
+    }
+
+    state.routeProjectionValid = !state.routePolyline.empty();
+
+    return state;
 }
 
 } // namespace carla

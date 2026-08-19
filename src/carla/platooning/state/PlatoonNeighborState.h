@@ -32,6 +32,7 @@ struct PlatoonNeighborState {
     bool valid = false;                   // True after at least one usable beacon has been received.
 
     double desiredSpeed = 10.0;           // Defeault desired speed
+    int laneId = 0;                       // CARLA lane_id from the sender's last beacon
 };
 
 } // namespace carla

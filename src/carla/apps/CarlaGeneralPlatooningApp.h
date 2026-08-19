@@ -27,6 +27,12 @@
 #include "plexe/messages/PlatooningBeacon_m.h"
 #include "plexe/messages/UpdatePlatoonData_m.h"
 #include "plexe/messages/UpdatePlatoonFormation_m.h"
+#include "carla/platooning/maneuver/CarlaExitManeuver.h"
+#include "carla/platooning/messages/ExitRequest_m.h"
+#include "carla/platooning/messages/ExitAck_m.h"
+#include "carla/platooning/controller/LateralController.h"
+#include "carla/platooning/state/ObservedVehicleState.h"
+#include "carla/platooning/maneuver/CarlaLaneChangeManeuver.h"
 
 namespace carla {
 // Id, cost needed for selecting a car to follow
@@ -34,6 +40,8 @@ struct PlatoonCandidate {
     bool valid = false;
     int vehicleId = -1;
     double cost = std::numeric_limits<double>::infinity();
+    int laneId = 0;        // candidate's lane; ego compares against its own to decide whether lane change needed
+    int laneDistance = 0;  // |candidate.laneId - ego.laneId|; 0 = same lane
 };
 /*
  * Main OMNeT++ application module for CARLA platooning nodes.
@@ -82,6 +90,13 @@ public:
 
     // Returns the lane metadata used in maneuver messages.
     int getCurrentLaneIndex() const override;
+
+    // GGet and change platoon and leader speeds
+    double getPlatoonDesiredSpeed() const override { return platoonDesiredSpeed_; }
+    void setLeaderTargetSpeed(double speed) override { leaderTargetSpeed_ = speed; }
+
+    // Remove front vehicle for controller purposes
+    void clearFrontVehicle() override { initialFrontId_ = -1; }
 
     // Sends a logical unicast over the broadcast 802.11p channel.
     // The destination id is stored in the message and checked by receivers.
@@ -193,6 +208,9 @@ protected:
     // Runs the configured longitudinal controller and returns desired speed/acceleration.
     ControlOutput computeControllerOutput() const;
 
+    // Builds vehicle controller
+    ObservedVehicleState buildObservedVehicleState() const;
+
 protected:
     // Mobility module updated by CarlanetManager from pyCARLANeT/CARLA snapshots.
     CarlaInetMobility* mobility_ = nullptr;
@@ -202,6 +220,9 @@ protected:
     int nodeId_ = -1;     // Logical OMNeT++ vehicle id used in V2V messages.
     int platoonId_ = -1;  // Logical platoon id.
     int leaderId_ = -1;   // Logical id of this vehicle's platoon leader.
+
+    // Controller type
+    std::string controllerType_ = "CACC";
 
     // Basic vehicle and speed parameters.
     double nominalPlatoonSpeed_ = 0.0; // m/s; steady platoon cruise speed.
@@ -216,6 +237,12 @@ protected:
     double kSpeedP_ = 0.7;  // gain on cruise speed error.
     double aMin_ = -4.0;    // m/s^2; minimum allowed acceleration, usually braking.
     double aMax_ = 2.5;     // m/s^2; maximum allowed acceleration.
+
+    // For sinusoidal movement
+    bool sinusoidalSpeed_ = false;
+    double sinusoidalAmplitude_ = 3.0;
+    double sinusoidalPeriod_ = 20.0;
+    double sinusoidalStartAt_ = 10.0;
 
     // Additional CACC/feed-forward and debug target-speed gains.
     double kAccFF_ = 1.0;          // gain on predecessor/leader controller acceleration.
@@ -236,9 +263,30 @@ protected:
     double platoonDesiredSpeed_ = 10.0;
     omnetpp::cMessage* heuristicTimer_ = nullptr; // needed to collect entries for the neighbor table
 
+    // Steering
+    simsignal_t controlSteerSignal_ = SIMSIGNAL_NULL;
+    double lastNormalizedSteer_ = 0.0;
+    bool lateralControlActive_ = false;
+    simsignal_t lateralControlActiveSignal_ = SIMSIGNAL_NULL;
+
+    /// Lane Change
+    bool multilaneJoinEnabled_ = false;
+    double laneChangePenalty_ = 5.0;
+    double laneWidthM_ = 3.5;
+    CarlaLaneChangeManeuver laneChangeManeuver_;
+
     // FOR TESTING PURPOSES ONLY
     omnetpp::cMessage* brakeTimer_ = nullptr;
+    CarlaExitManeuver* exitManeuver_ = nullptr;
+    cMessage* exitTimer_ = nullptr;
+    bool exitEnabled_ = false;
 
+    // Lateral Controller parameters
+    LateralController lateralController_;
+    bool lateralControlEnabled_ = false;
+    double lastSteerRad_ = 0.0;
+    bool lastValidSteeringAvailable_ = false;
+    
     // OMNeT++ timing parameters.
     simtime_t beaconInterval_ = SIMTIME_ZERO;    // interval between V2V beacons.
     simtime_t controlInterval_ = SIMTIME_ZERO;   // interval between controller updates.

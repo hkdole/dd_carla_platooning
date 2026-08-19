@@ -52,6 +52,11 @@ class BridgeApp : public omnetpp::cSimpleModule, public omnetpp::cListener {
     bool seenReverse = false;
     bool seenManualGearShift = false;
 
+    // Steering
+    double controlSteer = 0.0;
+    bool seenSteer = false;
+    bool lateralControlActive = false;
+
   protected:
     /**
      * Initializes signal subscriptions, timing state, and actor metadata.

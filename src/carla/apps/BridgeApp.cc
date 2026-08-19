@@ -106,10 +106,12 @@ void BridgeApp::initialize()
             "desired_acceleration",       // m/s^2; controller acceleration command for logs/metadata.
             "desired_speed",              // m/s; controller target speed for logs/metadata.
             "has_control",                // 1 if this actor should receive active throttle/brake.
+            "control_steer",              // normalized CARLA steer command [-1, 1]
             "control_throttle",           // normalized CARLA throttle command.
             "control_brake",              // normalized CARLA brake command.
             "control_hand_brake",         // boolean CARLA hand-brake flag.
             "control_reverse",            // boolean CARLA reverse flag.
+            "lateral_control_active",
             "control_manual_gear_shift"   // boolean CARLA manual gearbox flag.
         };
 
@@ -184,6 +186,16 @@ void BridgeApp::receiveSignal(cComponent* src,
         controlManualGearShift = (value != 0.0);
         seenManualGearShift = true;
     }
+    else if (std::strcmp(sigName, "control_steer") == 0) {
+        controlSteer = std::max(-1.0, std::min(1.0, value));
+        seenSteer = true;
+    }
+    else if (std::strcmp(sigName, "control_steer") == 0) {
+        controlSteer = std::max(-1.0, std::min(1.0, value));
+    }
+    else if (std::strcmp(sigName, "lateral_control_active") == 0) {
+        lateralControlActive = (value != 0.0);
+    }
     else {
         return;
     }
@@ -239,7 +251,8 @@ void BridgeApp::handleMessage(cMessage* msg)
            << "\"hand_brake\":" << (controlHandBrake ? "true" : "false") << ","
            << "\"reverse\":" << (controlReverse ? "true" : "false") << ","
            << "\"manual_gear_shift\":" << (controlManualGearShift ? "true" : "false") << ","
-           << "\"autopilot_steering\":true," // CARLA/Python keeps lateral steering on autopilot.
+           << "\"autopilot_steering\":" << (lateralControlActive ? "false" : "true") << ","
+           << "\"steer\":" << controlSteer << ","
            << "\"desired_acceleration\":" << desired_acceleration << ","
            << "\"controller_acceleration\":" << desired_acceleration << ","
            << "\"desired_speed\":" << desired_speed

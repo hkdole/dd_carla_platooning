@@ -9,6 +9,9 @@ simple CarlaGeneralPlatooningApp extends org.car2x.veins.modules.application.iee
         // CARLA actor identifier used by the Python bridge and logs.
         string actor_id @mutable = default(parent.actor_id);
 
+        // What type of controller the protocol uses
+        string controller_type = default("CACC");
+
         // Logical platoon role for this vehicle: "leader", "follower", "joiner", or none.
         string platoon_role @mutable = default("follower");
 
@@ -99,6 +102,15 @@ simple CarlaGeneralPlatooningApp extends org.car2x.veins.modules.application.iee
         double range @mutable = default(400.0);
         double desired_speed @mutable = default(10.0);
 
+        // Lateral control
+        bool lateral_control_enabled = default(false);
+        bool multilane_join_enabled = default(false);
+        double lane_change_penalty = default(5.0);
+        double lane_width_m @unit(m) = default(3.5m);
+
+        // Lane spawn
+        int spawn_lane_index = default(1);   // 0=innermost(lane -1), 1=default(lane -2), 2=(lane -3), 3=outermost(lane -4)
+
         // EXTRA FOR TESTING PURPOSES ONLY
         double brake_at @mutable @unit(s) = default(-1s); // Tells car to brake at a certain time
 
@@ -118,4 +130,14 @@ simple CarlaGeneralPlatooningApp extends org.car2x.veins.modules.application.iee
         @statistic[controllerAcceleration](title="controller acceleration"; source=controllerAcceleration; record=vector);
         @statistic[distance](title="gap to predecessor"; source=distance; record=vector);
         @statistic[relativeSpeed](title="relative speed to predecessor"; source=relativeSpeed; record=vector);
+
+        // Sinusoidal movement
+        bool sinusoidal_speed = default(false);
+        double sinusoidal_amplitude @unit(mps) = default(3.0mps);
+        double sinusoidal_period @unit(s) = default(20.0s);
+        double sinusoidal_start_at @unit(s) = default(10.0s);
+
+        // Exit 
+        bool exit_enabled = default(false);
+        double exit_at @unit(s) = default(-1s);
 }
